@@ -5,6 +5,7 @@
 use super::node::Node;
 
 // The main element of a bucket is a Vector of nodes.
+#[derive(Debug)]
 pub struct Bucket<'a> {
     pub nodes: Vec<Node<'a>>,
 }
@@ -15,6 +16,6 @@ impl<'a> Bucket<'a> {
     }
 
     pub fn sort(&mut self) {
-        let mut sorted: Vec<Node<'a>> = Vec::new();
+        self.nodes.sort()
     }
 }
