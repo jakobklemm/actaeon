@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 #[derive(Debug)]
 pub struct Node<'a> {
     ip: &'a str,
-    pub port: u16,
-    address: Address<'a>,
+    port: u16,
+    pub address: Address<'a>,
     last: SystemTime,
 }
 

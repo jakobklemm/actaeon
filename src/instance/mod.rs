@@ -5,12 +5,12 @@
 use crate::config::Config;
 
 // The Instance struct has public fields and is meant to be publicly.
-pub struct Instance<'a> {
-    pub config: &'a Config<'a>,
+pub struct Instance {
+    pub config: Config,
 }
 
-impl<'a> Instance<'a> {
-    pub fn new(config: &'a Config) -> Self {
-        Self { config: &config }
+impl Instance {
+    pub fn new(config: Config) -> Self {
+        Self { config: config }
     }
 }

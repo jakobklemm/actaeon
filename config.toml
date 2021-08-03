@@ -1,0 +1,12 @@
+[node]
+        # IP address, must be publicly reachable.
+        address = "192.168.1.238"
+        port = 4242
+        # RSA keys must be either listed directly or (in future versions) a directory with the generated key files can be provided. 
+        private = "rsa private key"
+        public = "rsa public key"
+[network]
+        # Comparable to the Kademlia value "k", specifies the bucket size & hash length.
+        size = 32
+        # (Future goal only): Specify a maximum number of connections.
+        limit = 0
