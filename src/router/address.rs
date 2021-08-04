@@ -29,7 +29,8 @@ impl<'a> Address<'a> {
         return d;
     }
 
-    pub fn bucket(&self) -> usize {
-        self.bytes[0] as usize / 8
+    pub fn bucket(&self, center: &'a Address) -> usize {
+        let distance = self.distance(center);
+        distance[0] as usize
     }
 }

@@ -1,21 +1,36 @@
 use actaeon::config::Config;
 
-use actaeon::instance::Instance;
-use actaeon::router;
+use actaeon::router::address::Address;
+use actaeon::router::node::Node;
+use actaeon::router::table::Table;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
     tracing::info!("Actaeon starting up!");
-    let config = Config::from_file("config.toml");
-    let _i = Instance::new(config);
-    let a = router::address::Address::new("hello world");
-    let _n = router::node::Node::new("192.168.1.25", 1234, a);
-    let a = router::address::Address::new("hello world");
-    let _n2 = router::node::Node::new("127.0.0.1", 4321, a);
-    let a = router::address::Address::new("hello world");
-    let n3 = router::node::Node::new("127.0.0.1", 4321, a);
-    let mut b = router::bucket::Bucket::new(n3);
-    b.sort();
+    let home = Node::new("", 0, Address::new(""));
+    let mut table = Table::new(home, 20);
+    let (f, n) = nodes();
+    table.add(f);
+    table.run(&n, 5, |i| tracing::info!("{}", i.print()));
     Ok(())
+}
+
+fn nodes() -> (Node<'static>, Node<'static>) {
+    let mut b = [0; 32];
+    b[1] = 32;
+    let first = Address {
+        bytes: b,
+        public: "aoeu",
+    };
+
+    let mut b = [0; 32];
+    b[0] = 42;
+    let second = Address {
+        bytes: b,
+        public: "aoeu",
+    };
+    let first = Node::new("", 0, first);
+    let second = Node::new("", 0, second);
+    (first, second)
 }

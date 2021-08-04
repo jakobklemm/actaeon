@@ -2,50 +2,50 @@
 //!
 //! Binary tree of k-Buckets, inspired by Kademlia.
 
+use super::bucket::Bucket;
 use super::node::Node;
+use std::collections::HashMap;
 
 pub struct Table<'a> {
-    nodes: Vec<Node<'a>>,
-    center: &'a Node<'a>,
-    count: usize,
+    nodes: HashMap<usize, Bucket<'a>>,
+    size: usize,
+    center: Node<'a>,
 }
 
 impl<'a> Table<'a> {
-    pub fn new(center: &'a Node, count: usize) -> Table<'a> {
-        Table {
-            nodes: Vec::new(),
-            center,
-            count,
+    pub fn new(center: Node<'a>, size: usize) -> Table<'a> {
+        let mut nodes = HashMap::new();
+        for n in 0..255 {
+            nodes.insert(n, Bucket::new(size));
+        }
+        Self {
+            nodes: nodes,
+            size: size,
+            center: center,
         }
     }
 
-    pub fn extract(&self, new: &'a Node, count: usize) -> Bucket<'a> {
-        let size = new.address.bytes[0];
-        let filtered = self
-            .nodes
-            .into_iter()
-            .filter(|x| x.address.bytes[0] == size)
-            .collect();
-        Bucket {
-            nodes: filtered,
-            size: size as usize,
-            count: count,
+    pub fn add(&mut self, node: Node<'a>) {
+        let bucket = self.nodes.get_mut(&node.bucket(&self.center)).unwrap();
+        bucket.add(node);
+    }
+
+    pub fn run<F>(&self, node: &'a Node, count: usize, execute: F)
+    where
+        F: Fn(&Node),
+    {
+        // Get "count" nodes and execute F on them.
+        let nodes = self.get(node, count);
+        for i in nodes.iter() {
+            execute(i);
         }
     }
 
-    fn size(node: Node) -> usize {
-        node.address.bucket()
-    }
-}
-
-struct Bucket<'a> {
-    nodes: Vec<Node<'a>>,
-    size: usize,
-    count: usize,
-}
-
-impl<'a> Bucket<'a> {
-    fn new(nodes: Vec<Node<'a>>, size: usize, count: usize) -> Self {
-        Self { nodes, size, count }
+    pub fn get(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
+        let mut nodes = Vec::new();
+        let node_bucket = node.bucket(&self.center);
+        let bucket = self.nodes.get(&node_bucket).unwrap();
+        nodes.append(&mut bucket.first(count));
+        return nodes;
     }
 }

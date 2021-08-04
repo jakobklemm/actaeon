@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 pub struct Node<'a> {
     ip: &'a str,
     port: u16,
-    pub address: Address<'a>,
+    address: Address<'a>,
     last: SystemTime,
 }
 
@@ -29,6 +29,18 @@ impl<'a> Node<'a> {
     // Returns the duration since the node was used last.
     pub fn since(&self) -> Duration {
         self.last.elapsed().unwrap()
+    }
+
+    pub fn refresh(&mut self) {
+        self.last = SystemTime::now()
+    }
+
+    pub fn bucket(&self, center: &'a Node) -> usize {
+        self.address.bucket(&center.address)
+    }
+
+    pub fn print(&self) -> String {
+	format!("ip: {}, key: {}", self.ip, self.address.public)
     }
 }
 
