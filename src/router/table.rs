@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 pub struct Table<'a> {
     nodes: HashMap<usize, Bucket<'a>>,
-    size: usize,
     center: Node<'a>,
 }
 
@@ -20,7 +19,6 @@ impl<'a> Table<'a> {
         }
         Self {
             nodes: nodes,
-            size: size,
             center: center,
         }
     }
@@ -42,10 +40,33 @@ impl<'a> Table<'a> {
     }
 
     pub fn get(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
-        let mut nodes = Vec::new();
         let node_bucket = node.bucket(&self.center);
         let bucket = self.nodes.get(&node_bucket).unwrap();
-        nodes.append(&mut bucket.first(count));
+        if bucket.len() >= count {
+            bucket.first(count)
+        } else {
+            self.get_all(node, count)
+        }
+    }
+
+    pub fn get_all(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
+        let nodes = self.join();
+        let mut sorted = Table::sort(nodes, node);
+        sorted.truncate(count);
+        sorted
+    }
+
+    pub fn join(&self) -> Vec<&'a Node> {
+        let mut nodes = Vec::new();
+        for (_i, value) in &self.nodes {
+            nodes.append(&mut value.all());
+        }
         return nodes;
+    }
+
+    pub fn sort(all: Vec<&'a Node>, node: &'a Node) -> Vec<&'a Node<'a>> {
+        let mut nodes = all;
+        nodes.sort_by(|n, m| n.address.cmp(&m.address, &node.address));
+        nodes
     }
 }

@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 pub struct Node<'a> {
     ip: &'a str,
     port: u16,
-    address: Address<'a>,
+    pub address: Address<'a>,
     last: SystemTime,
 }
 
@@ -40,7 +40,18 @@ impl<'a> Node<'a> {
     }
 
     pub fn print(&self) -> String {
-	format!("ip: {}, key: {}", self.ip, self.address.public)
+        format!("ip: {}, key: {}", self.ip, self.address.public)
+    }
+
+    // Helper functions for tests and debugging.
+    pub fn helper(s: &'a str) -> Node<'a> {
+        let a = Address::new(s);
+        Node {
+            ip: "",
+            port: 0,
+            address: a,
+            last: SystemTime::now(),
+        }
     }
 }
 

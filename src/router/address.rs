@@ -6,6 +6,8 @@
 // This ensures the key is valid, otherwise the data would be wrongly encrypted.
 // All fields are private since they should not be changable by the user, only with the key.
 
+use std::cmp::Ordering;
+
 #[derive(Clone, Debug)]
 pub struct Address<'a> {
     pub bytes: [u8; 32],
@@ -32,5 +34,12 @@ impl<'a> Address<'a> {
     pub fn bucket(&self, center: &'a Address) -> usize {
         let distance = self.distance(center);
         distance[0] as usize
+    }
+
+    // Not the trait implementation, since more parameters are required.
+    pub fn cmp(&self, other: &'a Address, center: &'a Address) -> Ordering {
+        let first = self.distance(center);
+        let second = other.distance(center);
+        first.cmp(&second)
     }
 }
