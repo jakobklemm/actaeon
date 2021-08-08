@@ -11,31 +11,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (f, n, l) = nodes();
     table.add(f);
     table.add(l);
-    table.run(&n, 5, |i| tracing::info!("{}", i.print()));
+    table.run(&n, 20, |i| tracing::info!("{}", i.print()));
     Ok(())
 }
 
 fn nodes() -> (Node<'static>, Node<'static>, Node<'static>) {
     let mut b = [0; 32];
     b[1] = 32;
-    let first = Address {
-        bytes: b,
-        public: "aoeu",
-    };
+    let first = Address::from_message(b);
 
     let mut b = [0; 32];
     b[0] = 42;
-    let second = Address {
-        bytes: b,
-        public: "aoet",
-    };
+    let second = Address::from_message(b);
 
     let mut b = [0; 32];
     b[0] = 132;
-    let third = Address {
-        bytes: b,
-        public: "aoeo",
-    };
+    let third = Address::from_message(b);
 
     let first = Node::new("", 0, first);
     let second = Node::new("", 0, second);

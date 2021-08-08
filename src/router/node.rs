@@ -40,7 +40,7 @@ impl<'a> Node<'a> {
     }
 
     pub fn print(&self) -> String {
-        format!("ip: {}, key: {}", self.ip, self.address.public)
+        format!("ip: {}, key: {}", self.ip, self.address.public.unwrap())
     }
 
     // Helper functions for tests and debugging.

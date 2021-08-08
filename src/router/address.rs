@@ -11,7 +11,8 @@ use std::cmp::Ordering;
 #[derive(Clone, Debug)]
 pub struct Address<'a> {
     pub bytes: [u8; 32],
-    pub public: &'a str,
+    pub public: Option<&'a str>,
+    verified: bool,
 }
 
 impl<'a> Address<'a> {
@@ -19,7 +20,16 @@ impl<'a> Address<'a> {
         let &hash = blake3::hash(public.as_bytes()).as_bytes();
         Self {
             bytes: hash,
-            public: public,
+            public: Some(public),
+            verified: true,
+        }
+    }
+
+    pub fn from_message(bytes: [u8; 32]) -> Self {
+        Self {
+            bytes,
+            public: None,
+            verified: false,
         }
     }
 
