@@ -1,3 +1,4 @@
 #+TITLE: Actaeon
 
-Kademlia inspired messaging system and PubSub.
+Distributed PubSub and Messaging protocol for decentralized real time
+application.
