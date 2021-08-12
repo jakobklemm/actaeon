@@ -2,44 +2,43 @@
 //!
 //! Message struct and type enums.
 
-use super::router::address::Address;
+use crate::router::address::Address;
 
 // TODO: Add Id to each message to prevent duplicate executes.
 pub struct Message {
-    class: Class,
-    source: Address,
-    target: Address,
-    body: [u8],
+    pub class: Class,
+    pub source: Address,
+    pub target: Address,
+    pub body: String,
 }
 
+#[derive(Eq, PartialEq, Debug)]
 pub enum Class {
     Lookup,
     Action,
 }
 
 impl Class {
-    fn new(class: u8) -> Self {
+    fn new(class: usize) -> Self {
         match class {
             1 => Self::Lookup,
             2 => Self::Action,
+            _ => panic!("Error"),
         }
     }
 }
 
 impl Message {
     // 2x ID + 8 bit Class ID = 520 bit / 8 Byte Message
-    pub fn new(data: &[u8]) {
+    pub fn deserialize(data: &[u8]) -> Self {
         if data.len() <= 65 {
             // TODO: Discard invalid messages
             panic!("Message not valid!");
         }
-        let class = data[0];
-        let source = data[1..33];
-        let target = data[33..65];
-        let class = Class::new(class);
-        let source = Address::from_message(source);
-        let target = Address::from_message(target);
-        let body = data[66..];
+        let class = Class::new(1);
+        let source = Address::new("abc");
+        let target = Address::new("def");
+        let body = String::new();
         Self {
             class,
             source,

@@ -12,4 +12,4 @@
         limit = 0
 [environment]
         # TRACE, DEBUG, INFO, WARN, ERROR
-        log = "WARN"
+        log = "TRACE"

@@ -2,26 +2,34 @@
 //!
 //! A node has some basic elements used for routing and sorting.
 
-use super::address::Address;
+use super::address::{Address, Connection};
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 
 // Each node requires connection data as well as Kademlia Routing Data.
 // It also stores the last seen time.
 #[derive(Debug, Clone)]
-pub struct Node<'a> {
-    ip: &'a str,
-    port: u16,
-    pub address: Address<'a>,
+pub struct Node {
+    pub connection: Connection,
+    pub address: Address,
     last: SystemTime,
 }
 
-impl<'a> Node<'a> {
-    pub fn new(ip: &'a str, port: u16, address: Address<'a>) -> Self {
+impl Node {
+    pub fn new(ip: &str, port: usize, public: &str) -> Self {
+        let connection = Connection::new(ip, port as u16);
+        let address = Address::new(public);
         Self {
-            ip,
-            port,
-            address,
+            connection: connection,
+            address: address,
+            last: SystemTime::now(),
+        }
+    }
+
+    pub fn compose(connection: Connection, address: Address) -> Self {
+        Self {
+            connection: connection,
+            address: address,
             last: SystemTime::now(),
         }
     }
@@ -35,27 +43,12 @@ impl<'a> Node<'a> {
         self.last = SystemTime::now()
     }
 
-    pub fn bucket(&self, center: &'a Node) -> usize {
+    pub fn bucket(&self, center: &Node) -> usize {
         self.address.bucket(&center.address)
-    }
-
-    pub fn print(&self) -> String {
-        format!("ip: {}, key: {:?}", self.ip, self.address.public)
-    }
-
-    // Helper functions for tests and debugging.
-    pub fn helper(s: &'a str) -> Node<'a> {
-        let a = Address::new(s);
-        Node {
-            ip: "",
-            port: 0,
-            address: a,
-            last: SystemTime::now(),
-        }
     }
 }
 
-impl<'a> Ord for Node<'a> {
+impl Ord for Node {
     // This function calculates the order based the time difference that they were last seen.
     // The function will panic should the time be invalid or the local system time is broken.
     // "Greater" means older.
@@ -66,13 +59,13 @@ impl<'a> Ord for Node<'a> {
             .cmp(&other.last.elapsed().unwrap())
     }
 }
-impl<'a> PartialOrd for Node<'a> {
+impl PartialOrd for Node {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<'a> Eq for Node<'a> {}
-impl<'a> PartialEq for Node<'a> {
+impl Eq for Node {}
+impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
         self.last == other.last
     }

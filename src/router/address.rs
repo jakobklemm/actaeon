@@ -9,28 +9,38 @@
 use std::cmp::Ordering;
 
 #[derive(Clone, Debug)]
-pub struct Address<'a> {
+pub struct Address {
     pub bytes: [u8; 32],
-    pub public: Option<&'a str>,
+    pub public: Option<String>,
     verified: bool,
 }
 
-impl<'a> Address<'a> {
-    pub fn new(public: &'a str) -> Self {
+#[derive(Clone, Debug)]
+pub struct Connection {
+    ip: String,
+    port: u16,
+}
+
+impl Address {
+    pub fn new(public: &str) -> Self {
         let &hash = blake3::hash(public.as_bytes()).as_bytes();
         Self {
             bytes: hash,
-            public: Some(public),
+            public: Some(public.to_string()),
             verified: true,
         }
     }
 
     pub fn from_message(bytes: [u8; 32]) -> Self {
         Self {
-            bytes,
+            bytes: bytes,
             public: None,
             verified: false,
         }
+    }
+
+    pub fn serialize(&self) -> &[u8] {
+        &self.bytes
     }
 
     pub fn distance(&self, source: &Self) -> [u8; 32] {
@@ -41,15 +51,24 @@ impl<'a> Address<'a> {
         return d;
     }
 
-    pub fn bucket(&self, center: &'a Address) -> usize {
+    pub fn bucket(&self, center: &Address) -> usize {
         let distance = self.distance(center);
         distance[0] as usize
     }
 
     // Not the trait implementation, since more parameters are required.
-    pub fn cmp(&self, other: &'a Address, center: &'a Address) -> Ordering {
+    pub fn cmp(&self, other: &Address, center: &Address) -> Ordering {
         let first = self.distance(center);
         let second = other.distance(center);
         first.cmp(&second)
+    }
+}
+
+impl Connection {
+    pub fn new(ip: &str, port: u16) -> Self {
+        Self {
+            ip: ip.to_string(),
+            port: port,
+        }
     }
 }

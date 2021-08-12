@@ -6,13 +6,13 @@ use super::bucket::Bucket;
 use super::node::Node;
 use std::collections::HashMap;
 
-pub struct Table<'a> {
-    nodes: HashMap<usize, Bucket<'a>>,
-    center: Node<'a>,
+pub struct Table {
+    nodes: HashMap<usize, Bucket>,
+    center: Node,
 }
 
-impl<'a> Table<'a> {
-    pub fn new(center: Node<'a>, size: usize) -> Table<'a> {
+impl Table {
+    pub fn new(center: Node, size: usize) -> Self {
         let mut nodes = HashMap::new();
         for n in 0..255 {
             nodes.insert(n, Bucket::new(size));
@@ -23,12 +23,12 @@ impl<'a> Table<'a> {
         }
     }
 
-    pub fn add(&mut self, node: Node<'a>) {
+    pub fn add(&mut self, node: Node) {
         let bucket = self.nodes.get_mut(&node.bucket(&self.center)).unwrap();
         bucket.add(node);
     }
 
-    pub fn run<F>(&self, node: &'a Node, count: usize, execute: F)
+    pub fn run<F>(&self, node: &Node, count: usize, execute: F)
     where
         F: Fn(&Node),
     {
@@ -39,7 +39,7 @@ impl<'a> Table<'a> {
         }
     }
 
-    pub fn get(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
+    pub fn get(&self, node: &Node, count: usize) -> Vec<Node> {
         let node_bucket = node.bucket(&self.center);
         let bucket = self.nodes.get(&node_bucket).unwrap();
         if bucket.len() >= count {
@@ -49,17 +49,14 @@ impl<'a> Table<'a> {
         }
     }
 
-    pub fn get_all(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
+    pub fn get_all(&self, node: &Node, count: usize) -> Vec<Node> {
         let nodes = self.join();
-        for i in nodes.iter() {
-            tracing::info!("{:?}", i.address.public);
-        }
         let mut sorted = Table::sort(nodes, node);
         sorted.truncate(count);
         sorted
     }
 
-    pub fn join(&self) -> Vec<&'a Node> {
+    pub fn join(&self) -> Vec<Node> {
         let mut nodes = Vec::new();
         for (_i, value) in &self.nodes {
             nodes.append(&mut value.all());
@@ -67,7 +64,7 @@ impl<'a> Table<'a> {
         return nodes;
     }
 
-    pub fn sort(all: Vec<&'a Node>, node: &'a Node) -> Vec<&'a Node<'a>> {
+    pub fn sort(all: Vec<Node>, node: &Node) -> Vec<Node> {
         let mut nodes = all;
         nodes.sort_by(|n, m| n.address.cmp(&m.address, &node.address));
         nodes

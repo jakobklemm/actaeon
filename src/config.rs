@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 use std::fs;
+use tracing::info;
 
 #[derive(Deserialize)]
 struct LoadConfig {
@@ -47,7 +48,7 @@ impl Config {
     pub fn from_file(path: &str) -> Config {
         let conf = fs::read_to_string(path).expect("Config path not valid!");
         let parsed: LoadConfig = toml::from_str(&conf).expect("Config not valid!");
-        tracing::info!("Loading configuration from file: {}", path);
+        info!("Loading configuration from file: {}", path);
         Config {
             address: parsed.node.address,
             port: parsed.node.port,
