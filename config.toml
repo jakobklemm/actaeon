@@ -10,3 +10,6 @@
         size = 32
         # (Future goal only): Specify a maximum number of connections.
         limit = 0
+[environment]
+        # TRACE, DEBUG, INFO, WARN, ERROR
+        log = "WARN"

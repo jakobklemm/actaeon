@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 // Each node requires connection data as well as Kademlia Routing Data.
 // It also stores the last seen time.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node<'a> {
     ip: &'a str,
     port: u16,
@@ -40,7 +40,7 @@ impl<'a> Node<'a> {
     }
 
     pub fn print(&self) -> String {
-        format!("ip: {}, key: {}", self.ip, self.address.public.unwrap())
+        format!("ip: {}, key: {:?}", self.ip, self.address.public)
     }
 
     // Helper functions for tests and debugging.

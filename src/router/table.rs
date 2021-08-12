@@ -51,6 +51,9 @@ impl<'a> Table<'a> {
 
     pub fn get_all(&self, node: &'a Node, count: usize) -> Vec<&'a Node> {
         let nodes = self.join();
+        for i in nodes.iter() {
+            tracing::info!("{:?}", i.address.public);
+        }
         let mut sorted = Table::sort(nodes, node);
         sorted.truncate(count);
         sorted

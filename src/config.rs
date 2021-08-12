@@ -10,6 +10,7 @@ use std::fs;
 struct LoadConfig {
     node: NodeConfig,
     network: NetworkConfig,
+    environment: Environment,
 }
 
 #[derive(Deserialize)]
@@ -26,6 +27,11 @@ struct NetworkConfig {
     limit: u16,
 }
 
+#[derive(Deserialize)]
+struct Environment {
+    log: String,
+}
+
 // Public configuration struct, fields can be directly accessed.
 pub struct Config {
     pub address: String,
@@ -34,6 +40,7 @@ pub struct Config {
     pub public: String,
     pub size: u16,
     pub limit: u16,
+    pub log: String,
 }
 
 impl Config {
@@ -48,6 +55,7 @@ impl Config {
             public: parsed.node.public,
             size: parsed.network.size,
             limit: parsed.network.limit,
+            log: parsed.environment.log,
         }
     }
 }
