@@ -2,13 +2,14 @@
 //!
 //! Kademlia style addresses to be used in the XOR distance metric.
 
-// The actual address is calcuated through the hash of the public key of the node.
-// This ensures the key is valid, otherwise the data would be wrongly encrypted.
-// All fields are private since they should not be changable by the user, only with the key.
+// The actual address is calcuated through the hash of the public key
+// of the node. This ensures the key is valid, otherwise the data
+// would be wrongly encrypted. All fields are private since they
+// should not be changable by the user, only with the key.
 
 use std::cmp::Ordering;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Address {
     pub bytes: [u8; 32],
     pub public: Option<String>,
@@ -23,7 +24,7 @@ pub struct Connection {
 
 impl Address {
     pub fn new(public: &str) -> Self {
-        let &hash = blake3::hash(public.as_bytes()).as_bytes();
+        let hash = blake3::hash(public.as_bytes()).as_bytes().to_owned();
         Self {
             bytes: hash,
             public: Some(public.to_string()),
