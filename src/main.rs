@@ -1,4 +1,4 @@
-use actaeon::config::Config;
+use actaeon::config;
 use actaeon::instance::Instance;
 use actaeon::router::node::Node;
 use actaeon::switch::handler::Handler;
@@ -6,12 +6,6 @@ use std::error::Error;
 use tracing::Level;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let config = Config::from_file("config.toml");
-    init(&config);
-    let this = Node::new("abc", 42, "self");
-    let instance = Instance::new(config, this);
-    tracing::info!(instance.config.limit);
-    let _u = Handler::start("127.0.0.1:8888".to_string());
     Ok(())
 }
 

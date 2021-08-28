@@ -26,6 +26,7 @@ struct NodeConfig {
 struct NetworkConfig {
     size: u16,
     limit: u16,
+    signaling: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +42,8 @@ pub struct Config {
     pub public: String,
     pub size: u16,
     pub limit: u16,
+    // TODO: Replace with signaling servers object
+    signaling: Vec<String>,
     pub log: String,
 }
 
@@ -56,6 +59,7 @@ impl Config {
             public: parsed.node.public,
             size: parsed.network.size,
             limit: parsed.network.limit,
+            signaling: parsed.network.signaling,
             log: parsed.environment.log,
         }
     }

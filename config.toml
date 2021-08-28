@@ -10,6 +10,8 @@
         size = 32
         # (Future goal only): Specify a maximum number of connections.
         limit = 0
+        # Signaling servers to run lookup through. 
+        signaling = [ "signaling.jeykey.net" ]
 [environment]
         # TRACE, DEBUG, INFO, WARN, ERROR
         log = "TRACE"

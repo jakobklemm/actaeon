@@ -2,5 +2,5 @@
 //!
 //! Responsible for accepting incoming connections, parsing messages and passing them to the correct nodes.
 
-pub mod message;
 pub mod handler;
+pub mod message;

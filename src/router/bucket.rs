@@ -28,7 +28,7 @@ impl Bucket {
 
     pub fn first(&self, size: usize) -> Vec<Node> {
         //self.nodes.iter().take(size).collect()
-	let mut selected = self.nodes.clone();
+        let mut selected = self.nodes.clone();
         selected.truncate(size);
         selected
     }
