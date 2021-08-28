@@ -8,10 +8,6 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc;
 use std::thread;
 
-pub struct SwitchInterface<T> {
-    channel: mpsc::Sender<T>,
-}
-
 pub struct Handler<T> {
     channel: mpsc::Receiver<T>,
 }

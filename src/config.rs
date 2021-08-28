@@ -1,7 +1,9 @@
 //! # Config
 //!
-//! System wide configuration data like network details and system parameters.
-//! The config struct can be populated either through hard coded values, loaded from a file or set through command line arguments.
+//! System wide configuration data like network details and system
+//! parameters. The config struct can be populated either through hard
+//! coded values, loaded from a file or set through command line
+//! arguments.
 
 use serde::Deserialize;
 use std::fs;
@@ -34,7 +36,9 @@ struct Environment {
     log: String,
 }
 
-// Public configuration struct, fields can be directly accessed.
+/// Public configuration struct, fields can be directly accessed. This
+/// will have to be restructured in the future in order to not simply
+/// have a single struct with a lot of fields.
 pub struct Config {
     pub address: String,
     pub port: u16,
@@ -43,7 +47,7 @@ pub struct Config {
     pub size: u16,
     pub limit: u16,
     // TODO: Replace with signaling servers object
-    signaling: Vec<String>,
+    pub signaling: Vec<String>,
     pub log: String,
 }
 
