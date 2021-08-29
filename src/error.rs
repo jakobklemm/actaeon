@@ -29,6 +29,13 @@ pub enum Error {
     /// permissions or issues with the local system time.
     #[error("OS error!")]
     System,
+    /// If the listener is currently busy or unable to stop.
+    #[error("Listener is still busy!")]
+    Busy,
+    /// If an adapter is in unblocking mode and there is no new
+    /// message for accept/0.
+    #[error("No new event to process!")]
+    Empty,
     #[error("Unknown error!")]
     Unknown,
 }

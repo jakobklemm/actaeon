@@ -14,6 +14,7 @@
 
 use crate::error::Error;
 use crate::router::address::Address;
+use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
@@ -166,6 +167,18 @@ impl Eq for Transaction {}
 impl PartialEq for Transaction {
     fn eq(&self, other: &Self) -> bool {
         self.verify() == other.verify()
+    }
+}
+
+impl Ord for Transaction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.created.cmp(&other.created)
+    }
+}
+
+impl PartialOrd for Transaction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(&other))
     }
 }
 
