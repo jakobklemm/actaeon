@@ -1,15 +1,12 @@
 //! Handler
 //!
-//! Accepts incoming tcp messages.
+//! Trait and structure specifications for network adapters. The
+//! system comes by default with a TCP Adapter, but it is possible to
+//! implement more methods.
 
 //use super::message::Message;
-use std::io::Read;
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc;
-use std::thread;
 
 use crate::error::Error;
-use crate::switch::SwitchInterface;
 use crate::transaction::Wire;
 
 /// By default the system uses a TCP listener for incoming
@@ -22,8 +19,11 @@ use crate::transaction::Wire;
 pub trait Adapter {
     /// If the adapter is passive and doesn't need to be started this
     /// method won't do anything, but for TCP-like methods this should
-    /// start the actuall listeners.
-    fn start(&mut self) -> Result<SwitchInterface, Error>;
+    /// start the actuall listeners. Starting the listener does not
+    /// require to start a thread, since the system will take care of
+    /// starting the thread. This also means that any implementation
+    /// of the adapter also has to implement Send & Sync.
+    fn start(&mut self) -> Result<(), Error>;
     /// Core function that will be used in the listening thread to get
     /// incoming messages. It will also have to parse it into a Wire
     /// object, which will then get evaluated. This is comparable to
@@ -50,44 +50,44 @@ pub enum Mode {
     Unblocking,
 }
 
-impl<T> Handler<T> {
-    pub fn start(addr: String) -> std::io::Result<SwitchInterface<T>> {
-        let listener = TcpListener::bind(addr)?;
+// impl<T> Handler<T> {
+//     pub fn start(addr: String) -> std::io::Result<SwitchInterface<T>> {
+//         let listener = TcpListener::bind(addr)?;
 
-        listener
-            .set_nonblocking(true)
-            .expect("Listener setup failed!");
+//         listener
+//             .set_nonblocking(true)
+//             .expect("Listener setup failed!");
 
-        let (tx, rx) = mpsc::channel();
+//         let (tx, rx) = mpsc::channel();
 
-        let handle = thread::spawn(move || {
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
-                        tracing::info!("New stream icoming: {:?}", stream.peer_addr().unwrap());
-                        Handler::handle(stream);
-                    }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!("Unable to handle new connection: {:?}", e)
-                    }
-                }
-            }
-        });
+//         let handle = thread::spawn(move || {
+//             for stream in listener.incoming() {
+//                 match stream {
+//                     Ok(stream) => {
+//                         tracing::info!("New stream icoming: {:?}", stream.peer_addr().unwrap());
+//                         Handler::handle(stream);
+//                     }
+//                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+//                         continue;
+//                     }
+//                     Err(e) => {
+//                         tracing::error!("Unable to handle new connection: {:?}", e)
+//                     }
+//                 }
+//             }
+//         });
 
-        let _a = handle.join();
+//         let _a = handle.join();
 
-        return SwitchInterface { channel: tx };
-    }
+//         return SwitchInterface { channel: tx };
+//     }
 
-    fn handle(mut s: TcpStream) {
-        let mut data = Vec::new();
-        let size = s.read_to_end(&mut data).unwrap();
-        tracing::info!("Received {} bytes of data.", size);
-        for i in data.into_iter() {
-            println!("{:?}", i);
-        }
-    }
-}
+//     fn handle(mut s: TcpStream) {
+//         let mut data = Vec::new();
+//         let size = s.read_to_end(&mut data).unwrap();
+//         tracing::info!("Received {} bytes of data.", size);
+//         for i in data.into_iter() {
+//             println!("{:?}", i);
+//         }
+//     }
+// }

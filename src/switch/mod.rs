@@ -1,8 +1,10 @@
 //! # Switch
 
 pub mod adapter;
+use crate::error::Error;
 use crate::transaction::Transaction;
-use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 /// Each message being sent between the Listener Thead and User Thread
 /// is either a UserAction or a SwitchAction, only UserAction get
@@ -52,12 +54,143 @@ struct Cache {
     limit: usize,
 }
 
+/// Starting the switch will create both SwitchInterface and Switch
+/// objects. The SwitchInterface will be passed up and to the user /
+/// instance. From there the user can interact (receive messages) with
+/// the listener. Currently the communication only works in one
+/// direction, sending messages will currently not utilize the
+/// dedicated thread. In the future this will get integrated into the
+/// thread and also include a two-directional channel system.
 pub struct SwitchInterface {
+    /// The SwitchInterface will implement recv/0 and try_recv/0
+    /// functions, which will internally receive messages from the
+    /// channel.
     channel: Receiver<Command>,
 }
 
+/// Currently the system requires a dedicated thread for the listening
+/// server, which will autoamtically get started. The thread will hold
+/// a Switch object and send messages through the channel.
 pub struct Switch {
+    /// mpsc sender component to send incoming messages to the user.
+    /// This will only be done for messages that are intended for the
+    /// user, not forwarded messages in the kademlia system.
     channel: Sender<Command>,
+    /// New transactions that are intended for the user will be
+    /// checked against the cache to see if they are duplicates.
+    /// TODO: Define term for "messages intended for the user"
     recent: Cache,
+    /// Since the system is suppose to be usable with different
+    /// transport layers and protocols a trait object of Adapter is
+    /// used to represent any adapter. By default the system will use
+    /// a TcpListener.
     handler: Box<dyn adapter::Adapter>,
+}
+
+impl Cache {
+    /// Creates a new empty cache with a fixed size limit. In the
+    /// future it might be helpful to dynamically change the cache
+    /// limit, currently that is not implemented.
+    pub fn new(limit: usize) -> Self {
+        Self {
+            elements: Vec::new(),
+            limit,
+        }
+    }
+
+    /// Takes a mutable reference to the cache and sorts the elements.
+    /// Transaction implements Ord based on the "created" timestamp,
+    /// which is used to sort the cache.
+    pub fn sort(&mut self) {
+        self.elements.sort()
+    }
+
+    /// Adds a new element to the cache. If the cache is full the
+    /// oldest element will get removed and the new element gets
+    /// added.
+    pub fn add(&mut self, element: Transaction) {
+        self.elements.push(element);
+        self.sort();
+        self.elements.truncate(self.limit);
+    }
+}
+
+impl Switch {
+    /// Creates a new pair of Switch and SwitchInterface and returns
+    /// them both. They need to be created at the same time, since
+    /// they both require access to the same channel. There is no
+    /// dedicated SwitchInterface::new, the interface has to be
+    /// created through this funciton.
+    pub fn new(limit: usize, adapter: Box<dyn adapter::Adapter>) -> (Switch, SwitchInterface) {
+        let (tx, rx) = mpsc::channel::<Command>();
+        let interface = SwitchInterface { channel: rx };
+        let cache = Cache::new(limit);
+        let switch = Switch {
+            recent: cache,
+            handler: adapter,
+            channel: tx,
+        };
+        (switch, interface)
+    }
+
+    /// Currently the behavior of this function is hard coded, in the
+    /// future it should be possible to opt out of starting the thread
+    /// or use a pool instead. This function will start a new thread
+    /// and run the start function of the adapter there. It will also
+    /// pass the entire object to the thread. TODO: Determine shutdown
+    /// method and what to do with handle.
+    pub fn start(self) -> Result<(), Error> {
+	thread::spawn(move || {
+
+	});
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::router::address::Address;
+    use crate::transaction::{Class, Message};
+
+    #[test]
+    fn test_cache_add() {
+        let mut c = Cache::new(42);
+        let t = transaction();
+        c.add(t);
+        assert_eq!(c.elements.len(), 1);
+    }
+
+    #[test]
+    fn test_cache_sort() {
+        let mut c = Cache::new(42);
+        let first = transaction();
+        let second = transaction();
+        c.add(second);
+        c.add(first.clone());
+        c.sort();
+        assert_eq!(c.elements[0], first);
+    }
+
+    #[test]
+    fn test_cache_limit() {
+        let mut c = Cache::new(1);
+        let first = transaction();
+        let second = transaction();
+        c.add(second);
+        c.add(first.clone());
+        assert_eq!(c.elements.len(), 1);
+    }
+
+    fn transaction() -> Transaction {
+        let message = Message::new(
+            Class::Ping,
+            Address::new("abc"),
+            Address::new("def"),
+            "test".to_string().as_bytes().to_vec(),
+        );
+        let t = Transaction::new(message);
+        return t;
+    }
 }

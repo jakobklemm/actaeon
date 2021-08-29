@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 /// The main object users will be interacting with to handle messages
 /// and events.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transaction {
     /// Unique ID to avoid duplicate processing.
     uuid: Uuid,
@@ -34,7 +34,7 @@ pub struct Transaction {
 
 /// Represents a single message, bu not the Wire format. It will
 /// mostly be accessed by the Transaction object.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
     /// Type / Class of the message, ensures only messages intended
     /// for the user reach him.
@@ -291,7 +291,7 @@ impl Message {
     /// function requires all values to be already present and does no
     /// conversion on any of them, it simply combines them into the
     /// object.
-    fn new(class: Class, source: Address, target: Address, body: Vec<u8>) -> Self {
+    pub fn new(class: Class, source: Address, target: Address, body: Vec<u8>) -> Self {
         Self {
             class,
             source,
