@@ -1,10 +1,11 @@
 //! # Switch
 
 pub mod adapter;
+use self::adapter::Mode;
 use crate::error::Error;
 use crate::transaction::Transaction;
-use std::thread;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
 /// Each message being sent between the Listener Thead and User Thread
 /// is either a UserAction or a SwitchAction, only UserAction get
@@ -84,7 +85,7 @@ pub struct Switch {
     /// transport layers and protocols a trait object of Adapter is
     /// used to represent any adapter. By default the system will use
     /// a TcpListener.
-    handler: Box<dyn adapter::Adapter>,
+    handler: Box<dyn adapter::Adapter + Send>,
 }
 
 impl Cache {
@@ -121,7 +122,10 @@ impl Switch {
     /// they both require access to the same channel. There is no
     /// dedicated SwitchInterface::new, the interface has to be
     /// created through this funciton.
-    pub fn new(limit: usize, adapter: Box<dyn adapter::Adapter>) -> (Switch, SwitchInterface) {
+    pub fn new(
+        limit: usize,
+        adapter: Box<dyn adapter::Adapter + Send>,
+    ) -> (Switch, SwitchInterface) {
         let (tx, rx) = mpsc::channel::<Command>();
         let interface = SwitchInterface { channel: rx };
         let cache = Cache::new(limit);
@@ -139,11 +143,21 @@ impl Switch {
     /// and run the start function of the adapter there. It will also
     /// pass the entire object to the thread. TODO: Determine shutdown
     /// method and what to do with handle.
-    pub fn start(self) -> Result<(), Error> {
-	thread::spawn(move || {
-
-	});
-        Ok(())
+    pub fn start(mut self) -> Result<u8, Error> {
+        todo!()
+        // thread::spawn(move || {
+        //     if let Ok(()) = self.handler.start() {
+        //         let _ = self.handler.mode(Mode::Unblocking);
+        //         loop {
+        //             let wire = self.handler.accept().unwrap();
+        //             self.recent.add(wire.convert());
+        //             // TODO: Kademlia processing
+        //         }
+        //     } else {
+        //         return Err(Error::System);
+        //     }
+        // });
+        // Ok(1)
     }
 }
 

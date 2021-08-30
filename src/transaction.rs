@@ -276,7 +276,7 @@ impl Wire {
 
     /// Turns a Wire Object into a Transaction. It constructs a new
     /// Message and Transaction from the data in Wire.
-    fn convert(self) -> Transaction {
+    pub fn convert(self) -> Transaction {
         let message = Message::new(self.class, self.source, self.target, self.body);
         Transaction {
             uuid: self.uuid,
