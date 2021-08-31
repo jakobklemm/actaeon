@@ -1,7 +1,7 @@
 #+TITLE: Actaeon
 
-Distributed PubSub and Messaging protocol for decentralized real time
-application.
+Distributed PubSub and messaging protocol for decentralized real time
+applications.
 
 * Goals
 - To provide a simple, easy to use library for general purpose
@@ -18,3 +18,14 @@ application.
 - The system should automatically take care of routing, verification
   and signaling without requiring any manuall management, without
   denying the user the ability to change relevant settings.
+
+* Terminology
+| Term                      | Explanation                                                |
+|---------------------------+------------------------------------------------------------|
+| Adapter                   | External interface                                         |
+| Passive Message           | Message not for this node, handled by the Kademlia system. |
+| Active Message            | Message for this and and for the user.                     |
+| Automatic Message         | Message for this node but handled internally.              |
+| Actaeon process / process | Dedicated thread for receiving messages.                   |
+| Center                    | Self / this, local node.                                   |
+

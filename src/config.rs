@@ -1,70 +1,122 @@
 //! # Config
 //!
-//! System wide configuration data like network details and system
-//! parameters. The config struct can be populated either through hard
-//! coded values, loaded from a file or set through command line
-//! arguments.
+//! The config is split into two parts: - System: General
+//! "system-wide" config for all major components. This section is at
+//! least partially meant to be manipulated by the user directly and
+//! includes sections like the signaling config and logging setups. -
+//! Center: The config describing this node itself, known as the
+//! "center". (This is a decentralized network but from the
+//! perspective of each node it is the center of it's own routing
+//! tree.) This also includes sections like the connection info of the
+//! node, which currently need to be manually set by the user. In the
+//! future this should get replaced by some sort of setup script or
+//! automatically handled in the signaling config.
 
+use crate::error::Error;
 use serde::Deserialize;
 use std::fs;
-use tracing::info;
 
+/// Config values for the config of networking parameters if the
+/// config is loaded from the default toml file. The values will
+/// usually come from the config file. Others might get populated by
+/// the code in order to prevent the user from chaning parameters.
+#[derive(Deserialize)]
+struct Network {
+    /// serde deserialization value for the config file.
+    bucket: usize,
+    /// serde deserialization value for the config file.
+    signaling: Vec<String>,
+    /// serde deserialization value for the config file.
+    /// TODO: Move cache to section "local" with additional fields.
+    cache: usize,
+}
+
+/// The current config only contains details about the network. In the
+/// default toml file this is still stored as a section, therefor
+/// requiring a dedicated struct.
 #[derive(Deserialize)]
 struct LoadConfig {
-    node: NodeConfig,
-    network: NetworkConfig,
-    environment: Environment,
+    /// Only section in the system config toml file.
+    network: Network,
 }
 
-#[derive(Deserialize)]
-struct NodeConfig {
-    address: String,
-    port: u16,
-    private: String,
-    public: String,
-}
-
-#[derive(Deserialize)]
-struct NetworkConfig {
-    size: u16,
-    limit: u16,
-    signaling: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct Environment {
-    log: String,
-}
-
-/// Public configuration struct, fields can be directly accessed. This
-/// will have to be restructured in the future in order to not simply
-/// have a single struct with a lot of fields.
+/// The main system config for the entire system. It is created here
+/// and then passed to the different modules. Currently the config is
+/// just a collection of fields, in the future this might get replaced
+/// by a collection of structs that keep the fields in their
+/// categories. The fields here will already be processed and
+/// converted, so the function might fail. Depending on how much is
+/// eventually handled by the application instead of the implementer
+/// it might also contain details about logging.
 pub struct Config {
-    pub address: String,
-    pub port: u16,
-    pub private: String,
-    pub public: String,
-    pub size: u16,
-    pub limit: u16,
-    // TODO: Replace with signaling servers object
+    /// Defines the size value of the kademlia based routing system,
+    /// comparable to the variable "k". It defines the size of each
+    /// bucket, the maximum number of buckets is currently not
+    /// configurable and defined through the hashing / address system.
+    pub bucket: usize,
+    /// Array of signaling servers, used to connect to the system
+    /// initially and possibly provide forwarding. TODO: Replace
+    /// String with signaling struct and update toml file with new
+    /// string format.
     pub signaling: Vec<String>,
-    pub log: String,
+    /// Maximum number of arguments in the Transaction cache in the
+    /// Actaeon Process.
+    pub cache: usize,
+}
+
+/// The local node is configured separately, since
+pub struct Center {
+    ip: String,
+    port: usize,
+    public_rsa: String,
+    private_rsa: String,
+    hostname: String,
 }
 
 impl Config {
-    pub fn from_file(path: &str) -> Config {
-        let conf = fs::read_to_string(path).expect("Config path not valid!");
-        let parsed: LoadConfig = toml::from_str(&conf).expect("Config not valid!");
-        info!("Loading configuration from file: {}", path);
-        Config {
-            address: parsed.node.address,
-            port: parsed.node.port,
-            private: parsed.node.private,
-            public: parsed.node.public,
-            size: parsed.network.size,
-            limit: parsed.network.limit,
-            signaling: parsed.network.signaling,
-            log: parsed.environment.log,
+    /// Manually define the config. This should be used if all values
+    /// are hard coded or obtained through a different way.
+    pub fn new(bucket: usize, cache: usize, signaling: Vec<String>) -> Self {
+        Self {
+            bucket,
+            signaling,
+            cache,
+        }
+    }
+
+    /// Loades the config from a toml file at the given path. It will
+    /// fail and return Err(e) should the file not be readable or
+    /// invalid. The file should be formatted and structured like the
+    /// example "config.toml" but any formatting that is acceptable to
+    /// the crates toml and serde should be acceptable.
+    pub fn from_file(path: &str) -> Result<Self, Error> {
+        let load = match fs::read_to_string(path) {
+            Ok(c) => {
+                log::trace!("Loading config from '{}'", path);
+                c
+            }
+            Err(e) => {
+                log::error!("Invalid path '{}', unable to load config: {}", path, e);
+                // If the config is not there simply return an empty
+                // string and let the system fail (again) in the next
+                // step.
+                String::new()
+            }
+        };
+        let config: Result<LoadConfig, toml::de::Error> = toml::from_str(&load);
+        match config {
+            Ok(c) => {
+                log::info!("Successfully loaded config from file!");
+                return Ok(Self {
+                    bucket: c.network.bucket,
+                    signaling: c.network.signaling,
+                    cache: c.network.cache,
+                });
+            }
+            Err(e) => {
+                log::error!("Config is not valid: {}", e);
+                return Err(Error::Config);
+            }
         }
     }
 }
