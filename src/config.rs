@@ -16,6 +16,8 @@ use crate::error::Error;
 use serde::Deserialize;
 use std::fs;
 
+use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
+
 /// Config values for the config of networking parameters if the
 /// config is loaded from the default toml file. The values will
 /// usually come from the config file. Others might get populated by
@@ -64,12 +66,42 @@ pub struct Config {
     pub cache: usize,
 }
 
-/// The local node is configured separately, since
-pub struct Center {
+/// The center config can be loaded from a dedicated file, therefore a
+/// simplified struct is needed. The toml file must list all fields
+/// directly, except for the secret key, which must be stored as a
+/// dedicated key file and can't (currently) be UTF-8 encoded. The
+/// secret key file (currently) has to be stored in the same directory
+/// as the center file.
+#[derive(Deserialize)]
+struct LoadCenter {
+    /// IP without any protocols (https, tcp, etc). Domains (should)
+    /// also work.
     ip: String,
+    /// Port must be available and it has to be possible to bind to
+    /// at.
+    port: u8,
+    /// Path to the secret key file in the same directory.
+    secret: String,
+    /// Username to use when possible instead of the routing ID.
+    hostname: String,
+}
+
+/// The local node is configured separately, since some of the values
+/// will have to be set manually or optained through an external
+/// method.
+pub struct Center {
+    /// IP address, currently must be reachable publicly.
+    /// TODO: Replace with "Connection".
+    ip: String,
+    /// Currently hard coded to networking, for full modularity this
+    /// needs to be replaced by something part of the adapter, since
+    /// not every adapter requires ip/port.
     port: usize,
-    public_rsa: String,
-    private_rsa: String,
+    /// The secret key stored for encryption, the public key can be
+    /// generated from it, so it doesn't have to be stored.
+    secret: SecretKey,
+    /// Where possible this is used as a user facing alternative to
+    /// the routing key.
     hostname: String,
 }
 
