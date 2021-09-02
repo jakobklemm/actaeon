@@ -145,7 +145,7 @@ impl Config {
             }
             Err(e) => {
                 log::error!("System config is not valid: {}", e);
-                return Err(Error::Config);
+                return Err(Error::Config(String::from("unable to parse toml")));
             }
         }
     }
@@ -193,7 +193,9 @@ impl CenterConfig {
             }
             Err(e) => {
                 log::error!("Config is not valid: {}", e);
-                return Err(Error::Config);
+                return Err(Error::Config(String::from(
+                    "unable to parse config from toml",
+                )));
             }
         }
     }
@@ -211,7 +213,7 @@ impl CenterConfig {
             Some(rkey) => {
                 let key = rkey?;
                 if key.len() != 32 {
-                    return Err(Error::Config);
+                    return Err(Error::Config(String::from("invalid byte length in key")));
                 }
                 let mut bytes: [u8; 32] = [0; 32];
                 for (i, j) in key.iter().enumerate() {
@@ -220,7 +222,7 @@ impl CenterConfig {
                 return Ok(bytes);
             }
             None => {
-                return Err(Error::Config);
+                return Err(Error::Config(String::from("key file is empty")));
             }
         }
     }

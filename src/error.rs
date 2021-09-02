@@ -11,21 +11,21 @@ use std::fmt;
 pub enum Error {
     /// If the network is experiencing issues connecting to other
     /// nodes.
-    Connection,
+    Connection(String),
     /// If any of the signaling servers can't be reached. This could
     /// be a reason to exit or panic.
-    Signaling,
+    Signaling(String),
     /// If the local config is not valid in any way. This might need
     /// to be expanded later to cover different kinds of config
     /// issues.
-    Config,
+    Config(String),
     /// Should messages or transactions not be valid or corrupted.
-    Invalid,
+    Invalid(String),
     /// Should there be any issues with the local system, for example
     /// permissions or issues with the local system time.
-    System,
+    System(String),
     /// If the listener is currently busy or unable to stop.
-    Busy,
+    Busy(String),
     /// Unknown error
     Unknown,
 }
@@ -34,19 +34,19 @@ impl std::error::Error for Error {}
 
 impl From<std::io::Error> for Error {
     fn from(_err: std::io::Error) -> Self {
-        Self::System
+        Self::System(String::from("generic IO error"))
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Connection => write!(f, "network connection failed"),
-            Self::Signaling => write!(f, "signaling server is unavailable"),
-            Self::Config => write!(f, "local configuration is not valid"),
-            Self::Invalid => write!(f, "message is not valid"),
-            Self::System => write!(f, "operating system error"),
-            Self::Busy => write!(f, "process is busy or unavailable"),
+            Self::Connection(s) => write!(f, "network connection failed: {}", s),
+            Self::Signaling(s) => write!(f, "signaling server is unavailable: {}", s),
+            Self::Config(s) => write!(f, "local configuration is not valid: {}", s),
+            Self::Invalid(s) => write!(f, "message is not valid: {}", s),
+            Self::System(s) => write!(f, "operating system error: {}", s),
+            Self::Busy(s) => write!(f, "process is busy or unavailable: {}", s),
             Self::Unknown => write!(f, "unknown error"),
         }
     }

@@ -147,28 +147,14 @@ impl Transaction {
     pub fn age(&self) -> Result<Duration, Error> {
         match self.created.elapsed() {
             Ok(time) => Ok(time),
-            Err(_) => Err(Error::System),
+            Err(_) => Err(Error::System(String::from("transaction time is invalid"))),
         }
-    }
-
-    /// Computes the checksum of select fields of the Transaction.
-    pub fn verify(&self) -> [u8; 32] {
-        let mut data: Vec<u8> = Vec::new();
-        data.append(&mut self.uuid.as_bytes().to_vec());
-        data.append(&mut self.message.source.serialize().to_vec());
-        data.append(&mut self.message.target.serialize().to_vec());
-        data.append(&mut self.message.body.clone());
-        *blake3::hash(data.as_slice()).as_bytes()
     }
 }
 
 impl Eq for Transaction {}
 
-impl PartialEq for Transaction {
-    fn eq(&self, other: &Self) -> bool {
-        self.verify() == other.verify()
-    }
-}
+impl PartialEq for Transaction {}
 
 impl Ord for Transaction {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -190,7 +176,7 @@ impl Class {
             0 => Self::Ping,
             1 => Self::Lookup,
             2 => Self::Action,
-            _ => Err(Error::Invalid),
+            _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
 
@@ -215,7 +201,7 @@ impl Wire {
     /// would be better.
     fn from_bytes(raw: &[u8]) -> Result<Self, Error> {
         if raw.len() <= 81 {
-            return Err(Error::Invalid);
+            return Err(Error::Invalid(String::from("invalid number of bytes")));
         }
 
         let class = raw[0];
@@ -241,7 +227,7 @@ impl Wire {
         let uuid = match Uuid::from_slice(&uuid) {
             Ok(uuid) => uuid,
             Err(_e) => {
-                return Err(Error::Invalid);
+                return Err(Error::Invalid(String::from("parsed uuid is invalid")));
             }
         };
 
@@ -398,12 +384,6 @@ mod tests {
             t.message.source.serialize(),
             Address::new("abc").serialize()
         );
-    }
-
-    #[test]
-    fn test_transaction_verify() {
-        let d = Transaction::from_bytes(&generate_test_data()).unwrap();
-        assert_ne!(d.verify()[0], 42);
     }
 
     #[test]

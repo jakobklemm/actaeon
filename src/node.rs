@@ -18,15 +18,18 @@
 
 use std::time::SystemTime;
 
-struct Node {
+struct Node<'a> {
     timestamp: SystemTime,
-    address: Address,
+    address: Address<'a>,
     connection: Connection,
 }
 
-/// TODO: Center pointer for Ord
-struct Address {
+/// Current short hand for the self node, used for calculating the distance in the Ord impl.
+struct Center([u8; 32]);
+
+struct Address<'a> {
     id: [u8; 32],
+    center: &'a Center,
 }
 
 struct Connection {}

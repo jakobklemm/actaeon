@@ -18,7 +18,15 @@ applications.
 - The system should automatically take care of routing, verification
   and signaling without requiring any manuall management, without
   denying the user the ability to change relevant settings.
-
+* Concurrency
+Currently the threading model is all hard coded, in the future a more
+modular system has to be implemented.
+- Acceptor Thread: Listens for new incoming TCP connections. It runs
+  in an continuous loop, only being active when a new connection
+  arrives, at which point it creates a connection object and passes it
+  on the system. No actual messages are processed on this thread.
+- Handler Thread: On the handler thread Connections can get
+  periodically processed when needed. 
 * Terminology
 | Term                      | Explanation                                                |
 |---------------------------+------------------------------------------------------------|
