@@ -11,12 +11,15 @@
 //! node, which currently need to be manually set by the user. In the
 //! future this should get replaced by some sort of setup script or
 //! automatically handled in the signaling config.
+//!
+//! TODO: Determine connection between center config and secret key
+//! and how much the library should be responsible for.
 
 use crate::error::Error;
 use serde::Deserialize;
 use std::fs;
-
-use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
+use std::fs::File;
+use std::io::BufRead;
 
 /// Config values for the config of networking parameters if the
 /// config is loaded from the default toml file. The values will
@@ -50,6 +53,7 @@ struct LoadConfig {
 /// converted, so the function might fail. Depending on how much is
 /// eventually handled by the application instead of the implementer
 /// it might also contain details about logging.
+#[derive(Debug, Eq, PartialEq)]
 pub struct Config {
     /// Defines the size value of the kademlia based routing system,
     /// comparable to the variable "k". It defines the size of each
@@ -79,30 +83,31 @@ struct LoadCenter {
     ip: String,
     /// Port must be available and it has to be possible to bind to
     /// at.
-    port: u8,
-    /// Path to the secret key file in the same directory.
-    secret: String,
-    /// Username to use when possible instead of the routing ID.
+    port: usize,
+    /// Whenever possible the hostname is used instead of the routing
+    /// key.
     hostname: String,
 }
 
 /// The local node is configured separately, since some of the values
 /// will have to be set manually or optained through an external
-/// method.
-pub struct Center {
+/// method. Like with the SystemConfig all fields are public and will
+/// be parsed into internall formats down the line.
+pub struct CenterConfig {
     /// IP address, currently must be reachable publicly.
     /// TODO: Replace with "Connection".
-    ip: String,
+    pub ip: String,
     /// Currently hard coded to networking, for full modularity this
     /// needs to be replaced by something part of the adapter, since
     /// not every adapter requires ip/port.
-    port: usize,
+    pub port: usize,
     /// The secret key stored for encryption, the public key can be
-    /// generated from it, so it doesn't have to be stored.
-    secret: SecretKey,
+    /// generated from it, so it doesn't have to be stored. Instead of
+    /// storing the object only the bytes will be processed here.
+    pub secret: Option<[u8; 32]>,
     /// Where possible this is used as a user facing alternative to
     /// the routing key.
-    hostname: String,
+    pub hostname: String,
 }
 
 impl Config {
@@ -116,33 +121,74 @@ impl Config {
         }
     }
 
-    /// Loades the config from a toml file at the given path. It will
-    /// fail and return Err(e) should the file not be readable or
-    /// invalid. The file should be formatted and structured like the
-    /// example "config.toml" but any formatting that is acceptable to
-    /// the crates toml and serde should be acceptable.
+    /// Shorthand for reading the config and parsing the toml. Will
+    /// fail if the fail is not readable or invalid.
     pub fn from_file(path: &str) -> Result<Self, Error> {
-        let load = match fs::read_to_string(path) {
-            Ok(c) => {
-                log::trace!("Loading config from '{}'", path);
-                c
-            }
-            Err(e) => {
-                log::error!("Invalid path '{}', unable to load config: {}", path, e);
-                // If the config is not there simply return an empty
-                // string and let the system fail (again) in the next
-                // step.
-                String::new()
-            }
-        };
-        let config: Result<LoadConfig, toml::de::Error> = toml::from_str(&load);
+        let content = fs::read_to_string(path)?;
+        Self::from_string(content)
+    }
+
+    /// Should the config already be available as a toml formatted
+    /// string it can be parsed directly. In the future this should be
+    /// made format independant by removing the hard coded dependancy
+    /// on serde / toml.
+    pub fn from_string(content: String) -> Result<Self, Error> {
+        let config: Result<LoadConfig, toml::de::Error> = toml::from_str(&content);
         match config {
             Ok(c) => {
-                log::info!("Successfully loaded config from file!");
+                log::info!("Successfully loaded system config from file!");
                 return Ok(Self {
                     bucket: c.network.bucket,
                     signaling: c.network.signaling,
                     cache: c.network.cache,
+                });
+            }
+            Err(e) => {
+                log::error!("System config is not valid: {}", e);
+                return Err(Error::Config);
+            }
+        }
+    }
+}
+
+impl CenterConfig {
+    /// Should the config be optained through a custom method or all
+    /// be hard hard coded (?) a new config can be created directly.
+    /// It is important to keep in mind that this part of the
+    /// configuration is meant to be in human readable (non-custom)
+    /// formatt, therefor the secret key is stored as an array of
+    /// bytes. It is not recommended to randomly generate these bytes,
+    /// instead encryption specific tools should be used.
+    pub fn new(ip: String, port: usize, secret: [u8; 32], hostname: String) -> Self {
+        Self {
+            ip,
+            port,
+            secret: Some(secret),
+            hostname,
+        }
+    }
+
+    /// Opens a config toml file at the provided path and parse it
+    /// into the object. This will not consider the secret key, since
+    /// it needs to be read separately.
+    pub fn from_file(path: &str) -> Result<Self, Error> {
+        let content = fs::read_to_string(path)?;
+        Self::from_string(content)
+    }
+
+    /// If the config is already available as a tomll string it can be
+    /// parsed directly. This will also ignore the secret key, since
+    /// it can't easily be stored in the same file.
+    pub fn from_string(config: String) -> Result<Self, Error> {
+        let config: Result<LoadCenter, toml::de::Error> = toml::from_str(&config);
+        match config {
+            Ok(c) => {
+                log::info!("Successfully loaded center config from file!");
+                return Ok(Self {
+                    ip: c.ip,
+                    port: c.port,
+                    secret: None,
+                    hostname: c.hostname,
                 });
             }
             Err(e) => {
@@ -151,4 +197,75 @@ impl Config {
             }
         }
     }
+
+    /// The secret key can't be formatted as UTF-8 and if stored as a
+    /// file it needs to be encoded / decoded using special methods.
+    ///
+    /// TODO: Add save center / key method or dedicated script.
+    pub fn load_key(path: &str) -> Result<[u8; 32], Error> {
+        let file = File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+
+        let line = reader.split(b'\n').next();
+        match line {
+            Some(rkey) => {
+                let key = rkey?;
+                if key.len() != 32 {
+                    return Err(Error::Config);
+                }
+                let mut bytes: [u8; 32] = [0; 32];
+                for (i, j) in key.iter().enumerate() {
+                    bytes[i] = *j;
+                }
+                return Ok(bytes);
+            }
+            None => {
+                return Err(Error::Config);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_system_parse() {
+        let c = "# Example Actaeon config.
+[network]
+        bucket = 32
+        signaling = [ 'signaling.jeykey.net' ]
+        cache = 32
+
+";
+        let config = Config::from_string(c.to_string()).unwrap();
+        let created = Config::new(32, 32, vec!["signaling.jeykey.net".to_owned()]);
+        assert_eq!(config, created);
+    }
+
+    #[test]
+    fn test_center_parse() {
+        let c = "# Example Actaeon config.
+        ip = '127.0.0.1'
+        port = 42
+        hostname = 'actaeon'
+";
+
+        let config = CenterConfig::from_string(c.to_string()).unwrap();
+        let created = CenterConfig::new("127.0.0.1".to_owned(), 42, [0; 32], "actaeon".to_owned());
+        assert_eq!(config.ip, created.ip);
+    }
+
+    // Test will sometimes fail, likely due to file system issues.
+    // TODO: Find special file system test method.
+    // #[test]
+    // fn test_center_read_secret() {
+    //     let (_, sec) = box_::gen_keypair();
+    //     std::fs::write("test_secret1.key", sec.0).unwrap();
+
+    //     let key = CenterConfig::load_key("test_secret1.key").unwrap();
+    //     assert_eq!(key, sec.0);
+    //     std::fs::remove_file("test_secret1.key").unwrap();
+    // }
 }

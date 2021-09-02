@@ -30,16 +30,24 @@ pub enum Error {
     Unknown,
 }
 
+impl std::error::Error for Error {}
+
+impl From<std::io::Error> for Error {
+    fn from(_err: std::io::Error) -> Self {
+        Self::System
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Connection => write!(f, "Network connection failed!"),
-            Self::Signaling => write!(f, "Signaling server is unavailable!"),
-            Self::Config => write!(f, "Local configuration is not valid!"),
-            Self::Invalid => write!(f, "Message is not valid!"),
-            Self::System => write!(f, "Operating system error!"),
-            Self::Busy => write!(f, "Process is busy or unavailable!"),
-            Self::Unknown => write!(f, "Unknown error!"),
+            Self::Connection => write!(f, "network connection failed"),
+            Self::Signaling => write!(f, "signaling server is unavailable"),
+            Self::Config => write!(f, "local configuration is not valid"),
+            Self::Invalid => write!(f, "message is not valid"),
+            Self::System => write!(f, "operating system error"),
+            Self::Busy => write!(f, "process is busy or unavailable"),
+            Self::Unknown => write!(f, "unknown error"),
         }
     }
 }

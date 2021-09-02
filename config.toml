@@ -1,8 +1,0 @@
-# Example Actaeon config.
-[network]
-        # Comparable to the Kademlia value "k", specifies the bucket size & hash length.
-        bucket = 32
-        # Signaling servers to run lookup through. 
-        signaling = [ "signaling.jeykey.net" ]
-        # Cache size limit of transactions
-        cache = 32
