@@ -185,12 +185,12 @@ impl PartialOrd for Transaction {
 impl Class {
     /// The class is serialized as a single byte, this function
     /// converts that to the object using a simple lookup table.
-    fn parse(raw: u8) -> Self {
+    fn parse(raw: u8) -> Result<Self, Error> {
         match raw {
             0 => Self::Ping,
             1 => Self::Lookup,
             2 => Self::Action,
-            _ => panic!("Error"),
+            _ => Err(Error::Invalid),
         }
     }
 
@@ -246,7 +246,7 @@ impl Wire {
         };
 
         Ok(Self {
-            class: Class::parse(class),
+            class: Class::parse(class)?,
             source: Address::from_message(source),
             target: Address::from_message(target),
             uuid: uuid,
@@ -307,12 +307,12 @@ mod tests {
 
     #[test]
     fn test_class_parse() {
-        assert_eq!(Class::parse(0), Class::Ping);
+        assert_eq!(Class::parse(0).unwrap(), Class::Ping);
     }
 
     #[test]
     fn test_class_bytes() {
-        assert_eq!(Class::parse(0).serialize(), 0);
+        assert_eq!(Class::parse(0).unwrap().serialize(), 0);
     }
 
     #[test]
