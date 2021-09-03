@@ -20,10 +20,17 @@ use crate::error::Error;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
 use std::time::SystemTime;
 
-struct Node {
+#[derive(Clone, Debug, Eq)]
+pub struct Node {
     timestamp: SystemTime,
     address: Address,
-    connection: Connection,
+    link: Option<Link>,
+}
+
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address
+    }
 }
 
 /// Config for self / this node, currently as part of the Node module,
@@ -36,27 +43,32 @@ struct Center {
     uptime: SystemTime,
 }
 
-struct Address {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Address {
     key: PublicKey,
 }
 
-struct Connection {
-    ip: String,
-    port: usize,
+/// TODO: Check if public is required.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Link {
+    pub ip: String,
+    pub port: usize,
+    reachable: bool,
+    attempts: usize,
 }
 
 impl Address {
     /// Create a new Address from a public key. (currently the only
     /// field so it could be created manually.) This is usally not
     /// meant to be used by the user / externally.
-    fn new(public: PublicKey) -> Self {
+    pub fn new(public: PublicKey) -> Self {
         Self { key: public }
     }
 
     /// Most of the times addresses will be created from bytes coming
     /// over the network, this function can be used, although it might
     /// fail if the key is invalid.
-    fn from_bytes(bytes: [u8; 32]) -> Result<Self, Error> {
+    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, Error> {
         if let Some(public) = PublicKey::from_slice(&bytes) {
             Ok(Self { key: public })
         } else {
@@ -64,7 +76,7 @@ impl Address {
         }
     }
 
-    fn as_bytes(&self) -> [u8; 32] {
+    pub fn as_bytes(&self) -> [u8; 32] {
         let mut bytes: [u8; 32] = [0; 32];
         let key = self.key.as_ref();
         for (i, j) in key.into_iter().enumerate() {
@@ -75,9 +87,39 @@ impl Address {
 
     /// If a random Address is required this can generate a public key
     /// from an input string by hashing it.
-    fn generate(source: &str) -> Result<Self, Error> {
+    pub fn generate(source: &str) -> Result<Self, Error> {
         let bytes = blake3::hash(source.as_bytes()).as_bytes().to_owned();
         Address::from_bytes(bytes)
+    }
+}
+
+impl Link {
+    /// Creates new connection details (Link). It can fail because it
+    /// tires to verify the values. Currently the port has to be above
+    /// 18, since all ports below that are considered to be reserved.
+    /// But this does not actually verify if the port is real or
+    /// available.
+    pub fn new(ip: String, port: usize) -> Result<Self, Error> {
+        if !ip.contains(".") || port <= 18 {
+            return Err(Error::Invalid(String::from(
+                "link details are not valid / represent impossible network connections",
+            )));
+        } else {
+            return Ok(Self {
+                ip,
+                port,
+                reachable: false,
+                attempts: 0,
+            });
+        }
+    }
+
+    pub fn is_reachable(&mut self) {
+        self.reachable = true;
+    }
+
+    pub fn attempted(&mut self) {
+        self.attempts += 1;
     }
 }
 
@@ -92,5 +134,17 @@ mod tests {
         let real = Address::new(p.clone());
         let test = Address::from_bytes(p.0).unwrap();
         assert_eq!(real.key.0, test.key.0);
+    }
+
+    #[test]
+    fn test_link_new() {
+        let l = Link::new(String::from("127.0.0.1"), 42).unwrap();
+        assert_eq!(l.port, 42);
+    }
+
+    #[test]
+    fn test_link_new_fail() {
+        let e = Link::new(String::new(), 0).is_err();
+        assert_eq!(e, true);
     }
 }

@@ -13,14 +13,14 @@
 //! required to check for duplicate messages.
 
 use crate::error::Error;
-use crate::router::address::Address;
+use crate::node::Address;
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 /// The main object users will be interacting with to handle messages
 /// and events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Transaction {
     /// Unique ID to avoid duplicate processing.
     uuid: Uuid,
@@ -34,7 +34,7 @@ pub struct Transaction {
 
 /// Represents a single message, bu not the Wire format. It will
 /// mostly be accessed by the Transaction object.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Message {
     /// Type / Class of the message, ensures only messages intended
     /// for the user reach him.
@@ -152,10 +152,6 @@ impl Transaction {
     }
 }
 
-impl Eq for Transaction {}
-
-impl PartialEq for Transaction {}
-
 impl Ord for Transaction {
     fn cmp(&self, other: &Self) -> Ordering {
         self.created.cmp(&other.created)
@@ -173,9 +169,9 @@ impl Class {
     /// converts that to the object using a simple lookup table.
     fn parse(raw: u8) -> Result<Self, Error> {
         match raw {
-            0 => Self::Ping,
-            1 => Self::Lookup,
-            2 => Self::Action,
+            0 => Ok(Self::Ping),
+            1 => Ok(Self::Lookup),
+            2 => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -233,8 +229,8 @@ impl Wire {
 
         Ok(Self {
             class: Class::parse(class)?,
-            source: Address::from_message(source),
-            target: Address::from_message(target),
+            source: Address::from_bytes(source)?,
+            target: Address::from_bytes(target)?,
             uuid: uuid,
             body: body,
         })
@@ -252,8 +248,8 @@ impl Wire {
     fn as_bytes(&self) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
         data.push(self.class.serialize());
-        data.append(&mut self.source.serialize().to_vec());
-        data.append(&mut self.target.serialize().to_vec());
+        data.append(&mut self.source.as_bytes().to_vec());
+        data.append(&mut self.target.as_bytes().to_vec());
         data.append(&mut self.uuid.as_bytes().to_vec());
         data.append(&mut self.body.clone());
 
@@ -306,8 +302,14 @@ mod tests {
         let data = generate_test_data();
         match Wire::from_bytes(&data) {
             Ok(wire) => {
-                assert_eq!(wire.source.serialize(), Address::new("abc").serialize());
-                assert_eq!(wire.target.serialize(), Address::new("def").serialize());
+                assert_eq!(
+                    wire.source.as_bytes(),
+                    Address::generate("abc").unwrap().as_bytes()
+                );
+                assert_eq!(
+                    wire.target.as_bytes(),
+                    Address::generate("def").unwrap().as_bytes()
+                );
                 assert_eq!(
                     wire.uuid,
                     Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap()
@@ -339,8 +341,8 @@ mod tests {
     fn test_transaction_new() {
         let m = Message::new(
             Class::Action,
-            Address::new("a"),
-            Address::new("b"),
+            Address::generate("a").unwrap(),
+            Address::generate("b").unwrap(),
             Vec::new(),
         );
         assert_eq!(Transaction::new(m).to_wire().class.serialize(), 2);
@@ -350,8 +352,8 @@ mod tests {
     fn test_transaction_age() {
         let m = Message::new(
             Class::Action,
-            Address::new("a"),
-            Address::new("b"),
+            Address::generate("a").unwrap(),
+            Address::generate("b").unwrap(),
             Vec::new(),
         );
         let t = Transaction::new(m);
@@ -365,8 +367,8 @@ mod tests {
 
         let m = Message::new(
             Class::Ping,
-            Address::new("abc"),
-            Address::new("def"),
+            Address::generate("abc").unwrap(),
+            Address::generate("def").unwrap(),
             Vec::new(),
         );
         let t = Transaction::new(m).as_bytes();
@@ -381,8 +383,8 @@ mod tests {
         let data = generate_test_data();
         let t = Transaction::from_bytes(&data).unwrap();
         assert_eq!(
-            t.message.source.serialize(),
-            Address::new("abc").serialize()
+            t.message.source.as_bytes(),
+            Address::generate("abc").unwrap().as_bytes()
         );
     }
 
@@ -392,22 +394,29 @@ mod tests {
         let time = SystemTime::now();
         let message = Message::new(
             Class::Ping,
-            Address::new("abc"),
-            Address::new("def"),
+            Address::generate("abc").unwrap(),
+            Address::generate("def").unwrap(),
             "test".to_string().as_bytes().to_vec(),
         );
         let t = Transaction::build(uuid, time, message);
         let d = Transaction::from_bytes(&generate_test_data()).unwrap();
-        // This also checks Eq and PartialEq impls
-        assert_eq!(t, d);
+        assert_eq!(t.message, d.message);
     }
 
     fn generate_test_data() -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
         data.push(0);
-        let source = Address::new("abc").serialize().to_owned();
+        let source = Address::generate("abc")
+            .unwrap()
+            .as_bytes()
+            .to_owned()
+            .to_vec();
         data.append(&mut source.clone());
-        let target = Address::new("def").serialize().to_owned();
+        let target = Address::generate("def")
+            .unwrap()
+            .as_bytes()
+            .to_owned()
+            .to_vec();
         data.append(&mut target.clone());
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         data.append(&mut uuid.clone().as_bytes().to_vec());
