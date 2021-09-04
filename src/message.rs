@@ -1,11 +1,16 @@
-//! # Body
+//! # Messages
 //!
-//! The actual contents being sent over the network. This module
-//! handles encoding and decoding, as well as crypto related
-//! functions.
+//! The actuall message and body for sending over the network. This
+//! module is also responsible for handling encryption and decryption
+//! of messages. Currently bodies of messages are the only things
+//! being encrypted in the system, in the future this might be
+//! expanded to include more items.
 
+use crate::error::Error;
 use crate::node::Address;
-use crate::transaction::{Class, Seed};
+use crate::node::Center;
+use crate::transaction::Class;
+use sodiumoxide::crypto::box_::{self, curve25519xsalsa20poly1305::Nonce};
 
 /// Represents a single message, but not the Wire format. It will
 /// mostly be accessed by the Transaction object.
@@ -36,20 +41,54 @@ pub struct Body {
     bytes: Vec<u8>,
 }
 
+/// The sodiumoxide Nonce does not support the same functions as are
+/// required here. Instead of duplicating this code throughout the
+/// codebase a simple wrapper struct is used.
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct Seed(Nonce);
+
 impl Message {
-    /// Construct a new message manually with all fields. This
-    /// function requires all values to be already present and does no
-    /// conversion on any of them, it simply combines them into the
-    /// object.
-    pub fn new(class: Class, source: Address, target: Address, seed: Seed, body: Vec<u8>) -> Self {
+    /// Create a new message with a random nonce (meant to be called
+    /// for new messages).
+    pub fn new(class: Class, source: Address, target: Address, body: Vec<u8>) -> Self {
+        Self {
+            class,
+            source,
+            target,
+            seed: Seed::new(box_::gen_nonce()),
+            body: Body::new(body),
+        }
+    }
+
+    /// Manually create a new messages will all fields already known.
+    pub fn create(
+        class: Class,
+        source: Address,
+        target: Address,
+        seed: Seed,
+        body: Vec<u8>,
+    ) -> Self {
         Self {
             class,
             source,
             target,
             seed,
-            // TODO: enc
             body: Body::new(body),
         }
+    }
+
+    /// Encrypt the message using the secret of the center (this
+    /// node) and the PublicKey of the target.
+    pub fn encrypt(&mut self, center: &Center) {
+        self.body.encrypt(&self.seed, &center, &self.target);
+    }
+
+    /// This function does not do the opposite of "encrypt". To get
+    /// the plain text data after encrypting it the secret of the
+    /// target node and the public key of the source node have to be
+    /// used.
+    pub fn decrypt(&mut self, center: &Center) -> Result<(), Error> {
+        self.body.decrypt(&self.seed, &center, &self.source)
     }
 }
 
@@ -57,7 +96,7 @@ impl Body {
     /// Creates the body with the given bytes.
     pub fn new(bytes: Vec<u8>) -> Self {
         Self {
-            is_plain: true,
+            is_plain: false,
             bytes,
         }
     }
@@ -66,5 +105,94 @@ impl Body {
     /// encryption.
     pub fn as_bytes(self) -> Vec<u8> {
         self.bytes
+    }
+
+    /// TODO: only act if plain
+    fn encrypt(&mut self, seed: &Seed, center: &Center, target: &Address) {
+        let enc = box_::seal(&self.bytes, &seed.0, &target.key, &center.secret);
+        self.bytes = enc;
+        self.is_plain = true;
+    }
+
+    /// TODO: only act if plain
+    fn decrypt(&mut self, seed: &Seed, center: &Center, source: &Address) -> Result<(), Error> {
+        let enc = box_::open(&self.bytes, &seed.0, &source.key, &center.secret)?;
+        self.bytes = enc;
+        self.is_plain = false;
+        Ok(())
+    }
+}
+
+impl Seed {
+    /// Creates a new Seed from a provided sodiumoxide nonce.
+    fn new(nonce: Nonce) -> Self {
+        Self(nonce)
+    }
+    /// Creates a new Seed from incoming bytes. It should mostly be
+    /// safe to unwrap, sodiumoxide should only fail if the length of
+    /// the slice isn't correct (meaning 24 bytes).
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if let Some(nonce) = Nonce::from_slice(bytes) {
+            Ok(Self(nonce))
+        } else {
+            Err(Error::Invalid(String::from(
+                "provided nonce bytes are invalid",
+            )))
+        }
+    }
+
+    /// The main reason why a wrapper around Nonce was needed: the
+    /// wire methods all require structs but sodiumoxide by default
+    /// only provides the option to convert into a slice. This
+    /// function takes care of the conversion by creating a new array
+    /// and populating it with elements from the Nonce.
+    pub fn as_bytes(&self) -> [u8; 24] {
+        let mut bytes: [u8; 24] = [0; 24];
+        for (i, j) in self.0.as_ref().into_iter().enumerate() {
+            bytes[i] = *j;
+        }
+        return bytes;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sodiumoxide::crypto::box_;
+
+    #[test]
+    fn test_seed_parse() {
+        let seed = box_::gen_nonce();
+        let s = Seed::from_bytes(&seed.0).unwrap();
+        assert_eq!(s.as_bytes(), seed.0[..]);
+    }
+
+    #[test]
+    fn test_message_encrypt() {
+        let mut m = Message::new(
+            Class::Ping,
+            Address::generate("a").unwrap(),
+            Address::generate("b").unwrap(),
+            Vec::new(),
+        );
+        let center = Center::new(box_::gen_keypair().1);
+        m.encrypt(&center);
+        assert_ne!(m.body.as_bytes().len(), 1);
+    }
+    #[test]
+    fn test_message_decrypt() {
+        let (theirpk, theirsk) = box_::gen_keypair();
+        let (ourpk, oursk) = box_::gen_keypair();
+        let mut m = Message::new(
+            Class::Ping,
+            Address::new(theirpk),
+            Address::new(ourpk),
+            [111, 42].to_vec(),
+        );
+        let theircenter = Center::new(theirsk);
+        let ourcenter = Center::new(oursk);
+        m.encrypt(&theircenter);
+        m.decrypt(&ourcenter).unwrap();
+        assert_eq!(m.body.as_bytes(), [111, 42]);
     }
 }

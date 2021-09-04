@@ -26,7 +26,7 @@ use std::time::SystemTime;
 #[derive(Clone, Debug, Eq)]
 pub struct Node {
     timestamp: SystemTime,
-    address: Address,
+    pub address: Address,
     link: Option<Link>,
 }
 
@@ -62,7 +62,7 @@ pub struct Center {
 pub struct Address {
     /// sodiumoxide poly1305 public key which is used to find and
     /// identify nodes.
-    key: PublicKey,
+    pub key: PublicKey,
 }
 
 /// Since the term Connection is already used to represent an acitve
@@ -144,6 +144,13 @@ impl Address {
             bytes[i] = *j;
         }
         return bytes;
+    }
+
+    /// Instead of creating a new array of fixed length this simply
+    /// returns a pointer to the bytes stored in the PublicKey as a
+    /// pointer.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.key.0[..]
     }
 
     /// If a "random" Address is required this can generate a public key

@@ -13,9 +13,8 @@
 //! required to check for duplicate messages.
 
 use crate::error::Error;
-use crate::message::Message;
+use crate::message::{Message, Seed};
 use crate::node::Address;
-use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::Nonce;
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -55,12 +54,6 @@ pub struct Wire {
     nonce: [u8; 24],
     body: Vec<u8>,
 }
-
-/// The sodiumoxide Nonce does not support the same functions as are
-/// required here. Instead of duplicating this code throughout the
-/// codebase a simple wrapper struct is used.
-#[derive(Eq, PartialEq, Debug, Clone)]
-pub struct Seed(Nonce);
 
 /// Each message has a type or function. Since "type" is a reserved
 /// keyword this is referred to as "Class". In the future this will be
@@ -154,34 +147,6 @@ impl Ord for Transaction {
 impl PartialOrd for Transaction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(&other))
-    }
-}
-
-impl Seed {
-    /// Creates a new Seed from incoming bytes. It should mostly be
-    /// safe to unwrap, sodiumoxide should only fail if the length of
-    /// the slice isn't correct (meaning 24 bytes).
-    fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        if let Some(nonce) = Nonce::from_slice(bytes) {
-            Ok(Self(nonce))
-        } else {
-            Err(Error::Invalid(String::from(
-                "provided nonce bytes are invalid",
-            )))
-        }
-    }
-
-    /// The main reason why a wrapper around Nonce was needed: the
-    /// wire methods all require structs but sodiumoxide by default
-    /// only provides the option to convert into a slice. This
-    /// function takes care of the conversion by creating a new array
-    /// and populating it with elements from the Nonce.
-    fn as_bytes(&self) -> [u8; 24] {
-        let mut bytes: [u8; 24] = [0; 24];
-        for (i, j) in self.0.as_ref().into_iter().enumerate() {
-            bytes[i] = *j;
-        }
-        return bytes;
     }
 }
 
@@ -292,7 +257,7 @@ impl Wire {
         let target = Address::from_bytes(self.target)?;
         let seed = Seed::from_bytes(&self.nonce)?;
         let uuid = Uuid::from_bytes(self.uuid);
-        let message = Message::new(class, source, target, seed, self.body);
+        let message = Message::create(class, source, target, seed, self.body);
         Ok(Transaction {
             uuid,
             created: SystemTime::now(),
@@ -357,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_transaction_new() {
-        let m = Message::new(
+        let m = Message::create(
             Class::Ping,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
@@ -369,7 +334,7 @@ mod tests {
 
     #[test]
     fn test_transaction_age() {
-        let m = Message::new(
+        let m = Message::create(
             Class::Action,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
@@ -385,7 +350,7 @@ mod tests {
     fn test_transaction_as_bytes() {
         let data = generate_test_data();
 
-        let m = Message::new(
+        let m = Message::create(
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
@@ -414,7 +379,7 @@ mod tests {
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         let time = SystemTime::now();
         let seed = Seed::from_bytes(&[0; 24]).unwrap();
-        let message = Message::new(
+        let message = Message::create(
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
