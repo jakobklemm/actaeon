@@ -13,7 +13,9 @@
 //! required to check for duplicate messages.
 
 use crate::error::Error;
+use crate::message::Message;
 use crate::node::Address;
+use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::Nonce;
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -32,43 +34,33 @@ pub struct Transaction {
     message: Message,
 }
 
-/// Represents a single message, bu not the Wire format. It will
-/// mostly be accessed by the Transaction object.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Message {
-    /// Type / Class of the message, ensures only messages intended
-    /// for the user reach him.
-    class: Class,
-    /// Who sent the message (not this network packet, but the key of
-    /// the node that initiated the message).
-    source: Address,
-    /// Receiver of the message, might be a never before seen Address.
-    target: Address,
-    /// The actual data of the message, currently just represented as
-    /// a vector of bytes. This might later get replaced by a trait
-    /// object to allow for smarter custom data formats.
-    body: Vec<u8>,
-}
-
 /// The Transaction and Message data will be converted into "Wire" and
 /// serialized. This struct contains fields from both objects and will
 /// be decontructed at the receiving end.
 ///
 /// Wire format:
-/// 1 byte: Class,
+/// 04 bytes: Class,
 /// 32 bytes: Source,
 /// 32 bytes: Target,
 /// 16 bytes: UUID,
-/// .. bytes: Body
+/// 24 bytes: Nonce,
+/// .. bytes: Body,
 ///
-/// Minimum data size: 81 bytes
+/// Minimum data size: 108 bytes (+ body).
 pub struct Wire {
-    uuid: Uuid,
-    class: Class,
-    source: Address,
-    target: Address,
+    uuid: [u8; 16],
+    class: [u8; 4],
+    source: [u8; 32],
+    target: [u8; 32],
+    nonce: [u8; 24],
     body: Vec<u8>,
 }
+
+/// The sodiumoxide Nonce does not support the same functions as are
+/// required here. Instead of duplicating this code throughout the
+/// codebase a simple wrapper struct is used.
+#[derive(Eq, PartialEq, Debug, Clone)]
+pub struct Seed(Nonce);
 
 /// Each message has a type or function. Since "type" is a reserved
 /// keyword this is referred to as "Class". In the future this will be
@@ -116,7 +108,7 @@ impl Transaction {
                 return Err(e);
             }
         };
-        Ok(wire.convert())
+        wire.convert()
     }
 
     /// Converts a Transaction into a Wire object. Currently this
@@ -126,11 +118,12 @@ impl Transaction {
     /// uses fewer allocations.
     fn to_wire(&self) -> Wire {
         Wire {
-            uuid: self.uuid,
-            class: self.message.class.clone(),
-            source: self.message.source.clone(),
-            target: self.message.target.clone(),
-            body: self.message.body.clone(),
+            uuid: *self.uuid.as_bytes(),
+            class: self.message.class.as_bytes(),
+            source: self.message.source.as_bytes(),
+            target: self.message.target.as_bytes(),
+            nonce: self.message.seed.as_bytes(),
+            body: self.message.body.clone().as_bytes(),
         }
     }
 
@@ -164,14 +157,42 @@ impl PartialOrd for Transaction {
     }
 }
 
+impl Seed {
+    /// Creates a new Seed from incoming bytes. It should mostly be
+    /// safe to unwrap, sodiumoxide should only fail if the length of
+    /// the slice isn't correct (meaning 24 bytes).
+    fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if let Some(nonce) = Nonce::from_slice(bytes) {
+            Ok(Self(nonce))
+        } else {
+            Err(Error::Invalid(String::from(
+                "provided nonce bytes are invalid",
+            )))
+        }
+    }
+
+    /// The main reason why a wrapper around Nonce was needed: the
+    /// wire methods all require structs but sodiumoxide by default
+    /// only provides the option to convert into a slice. This
+    /// function takes care of the conversion by creating a new array
+    /// and populating it with elements from the Nonce.
+    fn as_bytes(&self) -> [u8; 24] {
+        let mut bytes: [u8; 24] = [0; 24];
+        for (i, j) in self.0.as_ref().into_iter().enumerate() {
+            bytes[i] = *j;
+        }
+        return bytes;
+    }
+}
+
 impl Class {
     /// The class is serialized as a single byte, this function
     /// converts that to the object using a simple lookup table.
-    fn parse(raw: u8) -> Result<Self, Error> {
+    fn from_bytes(raw: [u8; 4]) -> Result<Self, Error> {
         match raw {
-            0 => Ok(Self::Ping),
-            1 => Ok(Self::Lookup),
-            2 => Ok(Self::Action),
+            [0, 0, 0, 1] => Ok(Self::Ping),
+            [0, 0, 0, 2] => Ok(Self::Lookup),
+            [0, 0, 0, 3] => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -180,11 +201,11 @@ impl Class {
     /// Class lookup table is duplicated in both functions, in the
     /// future it might be smarter to have a single table, should many
     /// more types be added.
-    fn serialize(&self) -> u8 {
+    fn as_bytes(&self) -> [u8; 4] {
         match self {
-            Self::Ping => 0,
-            Self::Lookup => 1,
-            Self::Action => 2,
+            Self::Ping => [0, 0, 0, 1],
+            Self::Lookup => [0, 0, 0, 2],
+            Self::Action => [0, 0, 0, 3],
         }
     }
 }
@@ -200,39 +221,45 @@ impl Wire {
             return Err(Error::Invalid(String::from("invalid number of bytes")));
         }
 
-        let class = raw[0];
+        let mut class: [u8; 4] = [0; 4];
         let mut source: [u8; 32] = [0; 32];
         let mut target: [u8; 32] = [0; 32];
         let mut uuid: [u8; 16] = [0; 16];
+        let mut nonce: [u8; 24] = [0; 24];
         let mut body: Vec<u8> = Vec::new();
 
         for (i, j) in raw.iter().enumerate() {
-            if i == 0 {
-                continue;
-            } else if i >= 1 && i <= 32 {
-                source[i - 1] = *j;
-            } else if i >= 33 && i <= 64 {
-                target[i - 33] = *j;
-            } else if i >= 65 && i <= 80 {
-                uuid[i - 65] = *j;
+            // bytes 0..3 = Class, len = 4, offset = 0
+            if i <= 3 {
+                class[i] = *j;
+            }
+            // bytes 4..35 = Source, len = 32, offset = 4
+            else if i >= 4 && i <= 35 {
+                source[i - 4] = *j;
+            }
+            // bytes 36..67 = Target, len = 32, offset = 36
+            else if i >= 36 && i <= 67 {
+                target[i - 36] = *j;
+            }
+            // bytes 68..83 = UUID, len = 16, offset = 68
+            else if i >= 68 && i <= 83 {
+                uuid[i - 68] = *j;
+            }
+            // bytes 84..107 = Nonce, len = 24, offset = 84
+            else if i >= 84 && i <= 107 {
+                nonce[i - 84] = *j;
             } else {
                 body.push(*j);
             }
         }
 
-        let uuid = match Uuid::from_slice(&uuid) {
-            Ok(uuid) => uuid,
-            Err(_e) => {
-                return Err(Error::Invalid(String::from("parsed uuid is invalid")));
-            }
-        };
-
         Ok(Self {
-            class: Class::parse(class)?,
-            source: Address::from_bytes(source)?,
-            target: Address::from_bytes(target)?,
-            uuid: uuid,
-            body: body,
+            class,
+            source,
+            target,
+            uuid,
+            nonce,
+            body,
         })
     }
 
@@ -247,10 +274,11 @@ impl Wire {
     /// TODO: Define mut / clone.
     fn as_bytes(&self) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
-        data.push(self.class.serialize());
-        data.append(&mut self.source.as_bytes().to_vec());
-        data.append(&mut self.target.as_bytes().to_vec());
-        data.append(&mut self.uuid.as_bytes().to_vec());
+        data.append(&mut self.class.to_vec());
+        data.append(&mut self.source.to_vec());
+        data.append(&mut self.target.to_vec());
+        data.append(&mut self.uuid.to_vec());
+        data.append(&mut self.nonce.to_vec());
         data.append(&mut self.body.clone());
 
         return data;
@@ -258,28 +286,18 @@ impl Wire {
 
     /// Turns a Wire Object into a Transaction. It constructs a new
     /// Message and Transaction from the data in Wire.
-    pub fn convert(self) -> Transaction {
-        let message = Message::new(self.class, self.source, self.target, self.body);
-        Transaction {
-            uuid: self.uuid,
+    pub fn convert(self) -> Result<Transaction, Error> {
+        let class = Class::from_bytes(self.class)?;
+        let source = Address::from_bytes(self.source)?;
+        let target = Address::from_bytes(self.target)?;
+        let seed = Seed::from_bytes(&self.nonce)?;
+        let uuid = Uuid::from_bytes(self.uuid);
+        let message = Message::new(class, source, target, seed, self.body);
+        Ok(Transaction {
+            uuid,
             created: SystemTime::now(),
             message,
-        }
-    }
-}
-
-impl Message {
-    /// Construct a new message manually with all fields. This
-    /// function requires all values to be already present and does no
-    /// conversion on any of them, it simply combines them into the
-    /// object.
-    pub fn new(class: Class, source: Address, target: Address, body: Vec<u8>) -> Self {
-        Self {
-            class,
-            source,
-            target,
-            body,
-        }
+        })
     }
 }
 
@@ -289,12 +307,15 @@ mod tests {
 
     #[test]
     fn test_class_parse() {
-        assert_eq!(Class::parse(0).unwrap(), Class::Ping);
+        assert_eq!(Class::from_bytes([0, 0, 0, 1]).unwrap(), Class::Ping);
     }
 
     #[test]
     fn test_class_bytes() {
-        assert_eq!(Class::parse(0).unwrap().serialize(), 0);
+        assert_eq!(
+            Class::from_bytes([0, 0, 0, 1]).unwrap().as_bytes(),
+            [0, 0, 0, 1]
+        );
     }
 
     #[test]
@@ -302,19 +323,16 @@ mod tests {
         let data = generate_test_data();
         match Wire::from_bytes(&data) {
             Ok(wire) => {
-                assert_eq!(
-                    wire.source.as_bytes(),
-                    Address::generate("abc").unwrap().as_bytes()
-                );
-                assert_eq!(
-                    wire.target.as_bytes(),
-                    Address::generate("def").unwrap().as_bytes()
-                );
+                assert_eq!(wire.source, Address::generate("abc").unwrap().as_bytes());
+                assert_eq!(wire.target, Address::generate("def").unwrap().as_bytes());
                 assert_eq!(
                     wire.uuid,
-                    Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap()
+                    Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf")
+                        .unwrap()
+                        .as_bytes()
+                        .to_owned()
                 );
-                assert_eq!(wire.class, Class::Ping);
+                assert_eq!(wire.class, [0, 0, 0, 1]);
                 assert_eq!(wire.body, "test".to_string().as_bytes())
             }
             Err(_e) => {
@@ -327,7 +345,7 @@ mod tests {
     fn test_wire_to_transaction() {
         let data = generate_test_data();
         let wire = Wire::from_bytes(&data).unwrap();
-        assert_eq!(wire.convert().message.class, Class::Ping);
+        assert_eq!(wire.convert().unwrap().message.class, Class::Ping);
     }
 
     #[test]
@@ -340,12 +358,13 @@ mod tests {
     #[test]
     fn test_transaction_new() {
         let m = Message::new(
-            Class::Action,
+            Class::Ping,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
+            Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
-        assert_eq!(Transaction::new(m).to_wire().class.serialize(), 2);
+        assert_eq!(Transaction::new(m).to_wire().class, [0, 0, 0, 1]);
     }
 
     #[test]
@@ -354,6 +373,7 @@ mod tests {
             Class::Action,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
+            Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
         let t = Transaction::new(m);
@@ -369,6 +389,7 @@ mod tests {
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
+            Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
         let t = Transaction::new(m).as_bytes();
@@ -392,10 +413,12 @@ mod tests {
     fn test_transaction_build() {
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         let time = SystemTime::now();
+        let seed = Seed::from_bytes(&[0; 24]).unwrap();
         let message = Message::new(
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
+            seed,
             "test".to_string().as_bytes().to_vec(),
         );
         let t = Transaction::build(uuid, time, message);
@@ -405,7 +428,9 @@ mod tests {
 
     fn generate_test_data() -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
-        data.push(0);
+
+        data.append(&mut [0, 0, 0, 1].to_vec());
+
         let source = Address::generate("abc")
             .unwrap()
             .as_bytes()
@@ -420,6 +445,8 @@ mod tests {
         data.append(&mut target.clone());
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         data.append(&mut uuid.clone().as_bytes().to_vec());
+
+        data.append(&mut [0; 24].to_vec());
 
         data.append(&mut "test".to_string().into_bytes());
         return data;
