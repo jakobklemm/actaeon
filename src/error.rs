@@ -3,6 +3,7 @@
 //! Internal error enum
 
 use std::fmt;
+use std::net::AddrParseError;
 
 /// Collection of error types of the entire system. There is currently
 /// no kind of smart conversion and this error do not interact with
@@ -35,6 +36,12 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(_err: std::io::Error) -> Self {
         Self::System(String::from("generic IO error"))
+    }
+}
+
+impl From<AddrParseError> for Error {
+    fn from(_err: AddrParseError) -> Self {
+        Self::Invalid(String::from("ip address is not a valid ipv4 format"))
     }
 }
 

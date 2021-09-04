@@ -1,5 +1,6 @@
 pub mod config;
 pub mod connection;
+pub mod crypto;
 pub mod error;
 pub mod node;
 //pub mod router;

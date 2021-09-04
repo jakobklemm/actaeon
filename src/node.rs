@@ -18,6 +18,9 @@
 
 use crate::error::Error;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
+use std::net::Ipv4Addr;
+use std::ops::BitXor;
+use std::str::FromStr;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, Eq)]
@@ -37,24 +40,77 @@ impl PartialEq for Node {
 /// might get restructured into a dedicated module in the future,
 /// should it increase in scope. It has to be created before all other
 /// nodes and stored in the interface.
-struct Center {
-    public: PublicKey,
-    secret: SecretKey,
-    uptime: SystemTime,
+pub struct Center {
+    /// The public key / address of this node / self, which gets
+    /// automatically generated from the secret key.
+    public: Address,
+    /// The base of the entire object / center calculation. It has to
+    /// be stored for encyption but should never be read by anybody
+    /// except for the crypto module.
+    ///
+    /// TODO: Make the secret key not publicly available.
+    pub secret: SecretKey,
+    pub uptime: SystemTime,
 }
 
+/// Routing address based on kademlia keys. Poly1305 public keys are
+/// used as the actual addresses, on which distance metrics are
+/// implemented. Currently the address only has once field so a
+/// shorthand notation would be possible. But since more fields might
+/// get added in the future the classic syntax is used.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Address {
+    /// sodiumoxide poly1305 public key which is used to find and
+    /// identify nodes.
     key: PublicKey,
 }
 
-/// TODO: Check if public is required.
+/// Since the term Connection is already used to represent an acitve
+/// connection between two nodes the information on how to establish
+/// this connection are grouped under the term "Link". Next to the two
+/// obvious once, which are currently locked to TCP/IP like values,
+/// the public IP addr and the port, there are also two internal
+/// fields that represent wheather a node is actually reachable. A
+/// simlpe boolean value is used to store the status and a counter
+/// will be increased on every attempt, which is supposed to happen
+/// periodically until the node has been reached or the number of
+/// attempts exceeds a set maximum.
+///
+/// Currently only IPV4 is supported, but this will have to be updated
+/// as soon as possible. Any given IP address must be publicly
+/// reachable, proxy modes are not yet supported.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Link {
-    pub ip: String,
+    /// IPV4 connection details which will be used by the TCP system
+    /// to establish a direct connections.
+    pub ip: Ipv4Addr,
+    /// The port could be represented as just a u16 but is currently
+    /// unlimited, since it does not get verified as an acutally
+    /// possible port.
     pub port: usize,
+    /// Stores wheather a node is acutally reachable, can be
+    /// interpreted as a filter for "valid" / possible links and
+    /// nodes. Changing it requires the node to be mutable, this might
+    /// get replaced by interior mutability in the future.
     reachable: bool,
+    /// Stores the nuber of attemps that have been made to connect to
+    /// a node. Once it exceeds a limit the link / node will be
+    /// discarded.
     attempts: usize,
+}
+
+impl Center {
+    /// Creates the center from the provided secret key (the user is
+    /// responsible for providing this). The public key and address
+    /// get generated from the secret and the current time is stored
+    /// for the router.
+    pub fn new(secret: SecretKey) -> Self {
+        Self {
+            public: Address::new(secret.public_key()),
+            secret,
+            uptime: SystemTime::now(),
+        }
+    }
 }
 
 impl Address {
@@ -76,6 +132,11 @@ impl Address {
         }
     }
 
+    /// Returns an array of bytes of the public key / address.
+    /// Currently it does not return a slice or reference to the
+    /// bytes, instead it creates a new array. This should make it
+    /// easier to use it in order to create Wire objects, which might
+    /// live longer than the node / address.
     pub fn as_bytes(&self) -> [u8; 32] {
         let mut bytes: [u8; 32] = [0; 32];
         let key = self.key.as_ref();
@@ -85,11 +146,40 @@ impl Address {
         return bytes;
     }
 
-    /// If a random Address is required this can generate a public key
+    /// If a "random" Address is required this can generate a public key
     /// from an input string by hashing it.
     pub fn generate(source: &str) -> Result<Self, Error> {
         let bytes = blake3::hash(source.as_bytes()).as_bytes().to_owned();
         Address::from_bytes(bytes)
+    }
+
+    /// Since the bucket ID (first byte of distance) is dependant on
+    /// the distance from the Center it has to be computed. Currently
+    /// this function uses as_bytes()/0 on both addresses, which
+    /// creates new arrays for both. In the future this will have to
+    /// be replaced with two different methods to reduce the memory
+    /// footprint.
+    pub fn bucket(&self, center: &Center) -> usize {
+        (self.as_bytes()[0] ^ center.public.as_bytes()[0]).into()
+    }
+}
+
+impl BitXor for Address {
+    type Output = [u8; 32];
+
+    /// Instead of a custom "distance method" the XOR operation itself
+    /// is implemented on addresses. This makes it easier to use in
+    /// any situation. Since as_bytes/0 currently returns new bytes
+    /// instead of pointers the conversion is done only once and a new
+    /// array is returned as well.
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        let mut bytes: [u8; 32] = [0; 32];
+        let source = rhs.as_bytes();
+        let target = self.as_bytes();
+        for i in 0..31 {
+            bytes[i] = target[i] ^ source[i];
+        }
+        return bytes;
     }
 }
 
@@ -99,12 +189,13 @@ impl Link {
     /// 18, since all ports below that are considered to be reserved.
     /// But this does not actually verify if the port is real or
     /// available.
-    pub fn new(ip: String, port: usize) -> Result<Self, Error> {
+    pub fn new(ip: &str, port: usize) -> Result<Self, Error> {
         if !ip.contains(".") || port <= 18 {
             return Err(Error::Invalid(String::from(
                 "link details are not valid / represent impossible network connections",
             )));
         } else {
+            let ip = Ipv4Addr::from_str(&ip)?;
             return Ok(Self {
                 ip,
                 port,
@@ -114,12 +205,13 @@ impl Link {
         }
     }
 
-    pub fn is_reachable(&mut self) {
-        self.reachable = true;
-    }
-
-    pub fn attempted(&mut self) {
+    /// This single function can be used to both incease the count of
+    /// the attempts and set it as true should it has been reached.
+    /// The counter will currently not be reset if the status is true,
+    /// this might help to sort out unreliable nodes.
+    pub fn update(&mut self, status: bool) {
         self.attempts += 1;
+        self.reachable = status;
     }
 }
 
@@ -137,14 +229,42 @@ mod tests {
     }
 
     #[test]
+    fn test_center_new() {
+        let (_, s) = box_::gen_keypair();
+        let c = Center::new(s);
+        assert_ne!(c.public.as_bytes(), [0; 32]);
+    }
+
+    #[test]
     fn test_link_new() {
-        let l = Link::new(String::from("127.0.0.1"), 42).unwrap();
+        let l = Link::new("127.0.0.1", 42).unwrap();
         assert_eq!(l.port, 42);
     }
 
     #[test]
     fn test_link_new_fail() {
-        let e = Link::new(String::new(), 0).is_err();
+        let e = Link::new("", 0).is_err();
         assert_eq!(e, true);
+    }
+
+    #[test]
+    fn test_address_xor() {
+        let a1 = Address::generate("test1").unwrap();
+        let a2 = Address::generate("test2").unwrap();
+        assert_ne!(a1 ^ a2, [0; 32]);
+    }
+
+    #[test]
+    fn test_address_xor_zero() {
+        let a = Address::generate("test").unwrap();
+        assert_eq!(a.clone() ^ a, [0; 32]);
+    }
+
+    #[test]
+    fn test_address_form_bytes_zero() {
+        let b = [0; 32];
+        let a = Address::from_bytes(b).unwrap();
+        let c = a.as_bytes();
+        assert_eq!(b, c);
     }
 }
