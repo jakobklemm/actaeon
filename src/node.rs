@@ -18,9 +18,7 @@
 
 use crate::error::Error;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
-use std::net::Ipv4Addr;
 use std::ops::BitXor;
-use std::str::FromStr;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, Eq)]
@@ -50,7 +48,12 @@ pub struct Center {
     ///
     /// TODO: Make the secret key not publicly available.
     pub secret: SecretKey,
+    /// The time this node was started, used to compare values in the
+    /// DRT.
     pub uptime: SystemTime,
+    /// User provided (ip finder is planned through signaling)
+    /// connection details.
+    pub link: Link,
 }
 
 /// Routing address based on kademlia keys. Poly1305 public keys are
@@ -83,7 +86,7 @@ pub struct Address {
 pub struct Link {
     /// IPV4 connection details which will be used by the TCP system
     /// to establish a direct connections.
-    pub ip: Ipv4Addr,
+    pub ip: String,
     /// The port could be represented as just a u16 but is currently
     /// unlimited, since it does not get verified as an acutally
     /// possible port.
@@ -104,11 +107,12 @@ impl Center {
     /// responsible for providing this). The public key and address
     /// get generated from the secret and the current time is stored
     /// for the router.
-    pub fn new(secret: SecretKey) -> Self {
+    pub fn new(secret: SecretKey, ip: String, port: usize) -> Self {
         Self {
             public: Address::new(secret.public_key()),
             secret,
             uptime: SystemTime::now(),
+            link: Link::new(ip, port),
         }
     }
 }
@@ -191,24 +195,13 @@ impl BitXor for Address {
 }
 
 impl Link {
-    /// Creates new connection details (Link). It can fail because it
-    /// tires to verify the values. Currently the port has to be above
-    /// 18, since all ports below that are considered to be reserved.
-    /// But this does not actually verify if the port is real or
-    /// available.
-    pub fn new(ip: &str, port: usize) -> Result<Self, Error> {
-        if !ip.contains(".") || port <= 18 {
-            return Err(Error::Invalid(String::from(
-                "link details are not valid / represent impossible network connections",
-            )));
-        } else {
-            let ip = Ipv4Addr::from_str(&ip)?;
-            return Ok(Self {
-                ip,
-                port,
-                reachable: false,
-                attempts: 0,
-            });
+    /// Creates new connection details (Link).
+    pub fn new(ip: String, port: usize) -> Self {
+        Self {
+            ip,
+            port,
+            reachable: false,
+            attempts: 0,
         }
     }
 
@@ -238,20 +231,14 @@ mod tests {
     #[test]
     fn test_center_new() {
         let (_, s) = box_::gen_keypair();
-        let c = Center::new(s);
+        let c = Center::new(s, String::from("abc"), 0);
         assert_ne!(c.public.as_bytes(), [0; 32]);
     }
 
     #[test]
     fn test_link_new() {
-        let l = Link::new("127.0.0.1", 42).unwrap();
+        let l = Link::new("127.0.0.1".to_string(), 42);
         assert_eq!(l.port, 42);
-    }
-
-    #[test]
-    fn test_link_new_fail() {
-        let e = Link::new("", 0).is_err();
-        assert_eq!(e, true);
     }
 
     #[test]

@@ -188,7 +188,7 @@ mod tests {
             Address::generate("b").unwrap(),
             Vec::new(),
         );
-        let center = Center::new(box_::gen_keypair().1);
+        let center = Center::new(box_::gen_keypair().1, String::from(""), 0);
         m.encrypt(&center);
         assert_ne!(m.body.as_bytes().len(), 1);
     }
@@ -202,8 +202,8 @@ mod tests {
             Address::new(ourpk),
             [111, 42].to_vec(),
         );
-        let theircenter = Center::new(theirsk);
-        let ourcenter = Center::new(oursk);
+        let theircenter = Center::new(theirsk, String::from(""), 0);
+        let ourcenter = Center::new(oursk, String::from(""), 0);
         m.encrypt(&theircenter);
         m.decrypt(&ourcenter).unwrap();
         assert_eq!(m.body.as_bytes(), [111, 42]);

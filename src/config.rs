@@ -61,9 +61,10 @@ pub struct Config {
     /// configurable and defined through the hashing / address system.
     pub bucket: usize,
     /// Array of signaling servers, used to connect to the system
-    /// initially and possibly provide forwarding. TODO: Replace
-    /// String with signaling struct and update toml file with new
-    /// string format.
+    /// initially and possibly provide forwarding.
+    ///
+    /// TODO: Replace String with signaling struct and update toml
+    /// file with new string format.
     pub signaling: Vec<String>,
     /// Maximum number of arguments in the Transaction cache in the
     /// Actaeon Process.
@@ -95,7 +96,6 @@ struct LoadCenter {
 /// be parsed into internall formats down the line.
 pub struct CenterConfig {
     /// IP address, currently must be reachable publicly.
-    /// TODO: Replace with "Connection".
     pub ip: String,
     /// Currently hard coded to networking, for full modularity this
     /// needs to be replaced by something part of the adapter, since
@@ -237,12 +237,12 @@ mod tests {
         let c = "# Example Actaeon config.
 [network]
         bucket = 32
-        signaling = [ 'signaling.jeykey.net' ]
+        signaling = [ '127.0.0.1' ]
         cache = 32
 
 ";
         let config = Config::from_string(c.to_string()).unwrap();
-        let created = Config::new(32, 32, vec!["signaling.jeykey.net".to_owned()]);
+        let created = Config::new(32, 32, vec!["127.0.0.1".to_owned()]);
         assert_eq!(config, created);
     }
 
