@@ -96,30 +96,43 @@ impl Body {
     /// Creates the body with the given bytes.
     pub fn new(bytes: Vec<u8>) -> Self {
         Self {
-            is_plain: false,
+            is_plain: true,
             bytes,
         }
     }
 
-    /// Returns the bytes currently in the body without chaning
+    /// Returns the bytes currently in the body without changing the
     /// encryption.
     pub fn as_bytes(self) -> Vec<u8> {
         self.bytes
     }
 
-    /// TODO: only act if plain
+    /// Actual body encryption called by the Message::encrypt. It will
+    /// only act if the body is currently plaintext, otherwise it
+    /// won't do anything. It does not check if the keys or values are
+    /// valid, no it is possible to loose data by encrypting it.
     fn encrypt(&mut self, seed: &Seed, center: &Center, target: &Address) {
-        let enc = box_::seal(&self.bytes, &seed.0, &target.key, &center.secret);
-        self.bytes = enc;
-        self.is_plain = true;
+        if self.is_plain {
+            let enc = box_::seal(&self.bytes, &seed.0, &target.key, &center.secret);
+            self.bytes = enc;
+            self.is_plain = false;
+        }
     }
 
-    /// TODO: only act if plain
+    /// Actual body decryption called by the Message::decrypt. It will
+    /// only act if the body is currently encrypted, otherwise it will
+    /// fail. It can also fail if the provided keys aren't valid. If
+    /// the data is valid the body of the message will get changed,
+    /// otherwise an error will be returned.
     fn decrypt(&mut self, seed: &Seed, center: &Center, source: &Address) -> Result<(), Error> {
-        let enc = box_::open(&self.bytes, &seed.0, &source.key, &center.secret)?;
-        self.bytes = enc;
-        self.is_plain = false;
-        Ok(())
+        if !self.is_plain {
+            let dec = box_::open(&self.bytes, &seed.0, &source.key, &center.secret)?;
+            self.bytes = dec;
+            self.is_plain = true;
+            Ok(())
+        } else {
+            Err(Error::Invalid(String::from("not encrypted")))
+        }
     }
 }
 
