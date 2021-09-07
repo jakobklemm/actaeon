@@ -27,6 +27,8 @@ pub enum Error {
     System(String),
     /// If the listener is currently busy or unable to stop.
     Busy(String),
+    /// If the cache, table, bucket, etc. is full.
+    Full,
     /// Unknown error
     Unknown,
 }
@@ -60,6 +62,7 @@ impl fmt::Display for Error {
             Self::Invalid(s) => write!(f, "message is not valid: {}", s),
             Self::System(s) => write!(f, "operating system error: {}", s),
             Self::Busy(s) => write!(f, "process is busy or unavailable: {}", s),
+            Self::Full => write!(f, "item limit has been reached"),
             Self::Unknown => write!(f, "unknown error"),
         }
     }

@@ -18,20 +18,16 @@
 
 use crate::error::Error;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
+use std::cmp::Ordering;
 use std::ops::BitXor;
 use std::time::SystemTime;
 
+/// TODO: Docs
 #[derive(Clone, Debug, Eq)]
 pub struct Node {
     timestamp: SystemTime,
     pub address: Address,
     link: Option<Link>,
-}
-
-impl PartialEq for Node {
-    fn eq(&self, other: &Self) -> bool {
-        self.address == other.address
-    }
 }
 
 /// Config for self / this node, currently as part of the Node module,
@@ -95,11 +91,51 @@ pub struct Link {
     /// interpreted as a filter for "valid" / possible links and
     /// nodes. Changing it requires the node to be mutable, this might
     /// get replaced by interior mutability in the future.
-    reachable: bool,
+    pub reachable: bool,
     /// Stores the nuber of attemps that have been made to connect to
     /// a node. Once it exceeds a limit the link / node will be
     /// discarded.
     attempts: usize,
+}
+
+impl Node {
+    pub fn new(address: Address, link: Option<Link>) -> Self {
+        Self {
+            address,
+            timestamp: SystemTime::now(),
+            link,
+        }
+    }
+    /// Returns the link status of a node. Should no link be available
+    /// it is treated as if the node is unavailable.
+    pub fn is_reachable(&self) -> bool {
+        match &self.link {
+            Some(link) => link.reachable,
+            None => false,
+        }
+    }
+}
+
+impl Ord for Node {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .timestamp
+            .elapsed()
+            .unwrap()
+            .cmp(&self.timestamp.elapsed().unwrap())
+    }
+}
+
+impl PartialOrd for Node {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Node {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address
+    }
 }
 
 impl Center {
@@ -196,6 +232,8 @@ impl BitXor for Address {
 
 impl Link {
     /// Creates new connection details (Link).
+    ///
+    /// TODO: Replace "reachable" with "status" enum.
     pub fn new(ip: String, port: usize) -> Self {
         Self {
             ip,
