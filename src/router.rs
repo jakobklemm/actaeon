@@ -38,7 +38,9 @@ impl Bucket {
     /// Creates a new empty bucket and stores the provided limit. It
     /// usually has to be declared as mutable, since sorting and
     /// adding require mutable references. This might get replaced by
-    /// interior mutability in the future.
+    /// interior mutability in the future. It should be enough to just
+    /// store the nodes in a RefCell, since everything else stays
+    /// constant.
     fn new(limit: usize) -> Self {
         Self {
             nodes: Vec::new(),
@@ -53,8 +55,11 @@ impl Bucket {
         self.nodes.sort();
     }
 
+    /// Adds a node to a bucket. This is intended to be used with the
+    /// bucket that contains the center. It will not replace any
+    /// existing nodes and returns an error, if the bucket is full.
     fn add_center(&mut self, node: Node) -> Result<(), Error> {
-        if self.len() <= self.limit {
+        if self.len() < self.limit {
             self.nodes.push(node);
             Ok(())
         } else {
@@ -130,6 +135,17 @@ mod tests {
         bucket.add_other(node1.clone());
         bucket.sort();
         assert_eq!(bucket.nodes[0], node1);
+        assert_eq!(bucket.len(), 1);
+    }
+
+    #[test]
+    fn test_bucket_center_fail() {
+        let mut bucket = Bucket::new(1);
+        let node1 = node("abc");
+        let node2 = node("def");
+        bucket.add_center(node2.clone()).unwrap();
+
+        assert_eq!(bucket.add_center(node1.clone()).is_err(), true);
         assert_eq!(bucket.len(), 1);
     }
 
