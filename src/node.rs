@@ -37,7 +37,7 @@ pub struct Node {
 pub struct Center {
     /// The public key / address of this node / self, which gets
     /// automatically generated from the secret key.
-    public: Address,
+    pub public: Address,
     /// The base of the entire object / center calculation. It has to
     /// be stored for encyption but should never be read by anybody
     /// except for the crypto module.

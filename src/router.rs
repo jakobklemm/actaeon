@@ -16,34 +16,48 @@ pub struct RoutingTable {
     limit: usize,
 }
 
-enum Element {
-    Split(RTNode),
-    Leaf(Bucket),
+struct Property {
+    side: Side,
+    ll: u8,
+    ul: u8,
 }
 
-struct RTNode {
-    split: Address,
+enum Side {
+    Far,
+    Near,
+}
+
+enum Element {
+    Node(Point),
+    Leaf(Leaf),
+}
+
+struct Point {
+    property: Property,
     near: Box<Element>,
-    far: Box<Element>,
+    far: Box<Leaf>,
 }
 
 /// Stores a maximum of "limit" nodes, sorted by age / time. The first
 /// element in the array is the oldest one.
-struct Bucket {
+struct Leaf {
+    property: Property,
     nodes: Vec<Node>,
     limit: usize,
 }
 
-impl Bucket {
+impl Leaf {
     /// Creates a new empty bucket and stores the provided limit. It
     /// usually has to be declared as mutable, since sorting and
     /// adding require mutable references. This might get replaced by
     /// interior mutability in the future. It should be enough to just
     /// store the nodes in a RefCell, since everything else stays
     /// constant.
-    fn new(limit: usize) -> Self {
+    fn new(limit: usize, side: Side, ll: u8, ul: u8) -> Self {
+        let property = Property { side, ll, ul };
         Self {
             nodes: Vec::new(),
+            property,
             limit,
         }
     }
@@ -55,15 +69,23 @@ impl Bucket {
         self.nodes.sort();
     }
 
-    /// Adds a node to a bucket. This is intended to be used with the
-    /// bucket that contains the center. It will not replace any
-    /// existing nodes and returns an error, if the bucket is full.
-    fn add_center(&mut self, node: Node) -> Result<(), Error> {
-        if self.len() < self.limit {
-            self.nodes.push(node);
-            Ok(())
+    /// Adds a node to a bucket. If the bucket is full, an error is
+    /// returned. This function does not follow any of the kademlia
+    /// rules and is intended to be used as a first step, before
+    /// specifiying the behavior for full buckets. Currently a
+    /// dedicated error type is used for situations like this:
+    /// Error::Full. Should the node not belong in this bucket, the
+    /// function will also fail.
+    fn try_add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
+        // TODO: Don't clone?
+        let distance = node.address.clone() ^ center.public.clone();
+        if distance[0] >= self.property.ll && distance[0] <= self.property.ul {
+            return Err(Error::Invalid(String::from("mismatched bucket")));
+        } else if self.len() > self.limit {
+            return Err(Error::Full);
         } else {
-            Err(Error::Full)
+            self.nodes.push(node);
+            return Ok(());
         }
     }
 
@@ -80,7 +102,7 @@ impl Bucket {
     ///
     /// This function will not split buckets or create new, should the
     /// bucket be full the node is simply disregarded.
-    fn add_other(&mut self, node: Node) {
+    fn add(&mut self, node: Node) {
         if self.len() < self.limit {
             self.nodes.push(node);
             self.sort();
@@ -110,17 +132,17 @@ mod tests {
 
     #[test]
     fn test_bucket_create() {
-        let bucket = Bucket::new(42);
+        let bucket = Leaf::new(42);
         assert_eq!(bucket.limit, 42);
     }
 
     #[test]
     fn test_bucket_sort() {
-        let mut bucket = Bucket::new(42);
+        let mut bucket = Leaf::new(42);
         let node1 = node("abc");
         let node2 = node("def");
-        bucket.add_other(node2);
-        bucket.add_other(node1.clone());
+        bucket.add(node2);
+        bucket.add(node1.clone());
         bucket.sort();
         assert_eq!(bucket.nodes[0], node1);
         assert_eq!(bucket.len(), 2);
@@ -128,11 +150,11 @@ mod tests {
 
     #[test]
     fn test_bucket_other_replace() {
-        let mut bucket = Bucket::new(1);
+        let mut bucket = Leaf::new(1);
         let node1 = node("abc");
         let node2 = node("def");
-        bucket.add_other(node2.clone());
-        bucket.add_other(node1.clone());
+        bucket.add(node2.clone());
+        bucket.add(node1.clone());
         bucket.sort();
         assert_eq!(bucket.nodes[0], node1);
         assert_eq!(bucket.len(), 1);
@@ -140,24 +162,24 @@ mod tests {
 
     #[test]
     fn test_bucket_center_fail() {
-        let mut bucket = Bucket::new(1);
+        let mut bucket = Leaf::new(1);
         let node1 = node("abc");
         let node2 = node("def");
-        bucket.add_center(node2.clone()).unwrap();
+        bucket.try_add(node2.clone()).unwrap();
 
-        assert_eq!(bucket.add_center(node1.clone()).is_err(), true);
+        assert_eq!(bucket.try_add(node1.clone()).is_err(), true);
         assert_eq!(bucket.len(), 1);
     }
 
     #[test]
     fn test_bucket_other_ignore() {
-        let mut bucket = Bucket::new(1);
+        let mut bucket = Leaf::new(1);
         let node1 = node("abc");
         let mut link2 = Link::new(String::new(), 42);
         link2.update(true);
         let node2 = Node::new(Address::generate("").unwrap(), Some(link2));
-        bucket.add_other(node2.clone());
-        bucket.add_other(node1.clone());
+        bucket.add(node2.clone());
+        bucket.add(node1.clone());
         bucket.sort();
         assert_eq!(bucket.nodes[0], node2);
         assert_eq!(bucket.len(), 1);
