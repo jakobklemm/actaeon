@@ -170,6 +170,36 @@ impl Point {
             }
         }
     }
+
+    fn remove(&mut self, node: &Node, center: &Center) -> bool {
+        if self.in_range_far(node, center) {
+            match self.far.as_mut() {
+                Element::Leaf(leaf) => {
+                    for (i, j) in leaf.nodes.iter().enumerate() {
+                        if j == node {
+                            leaf.nodes.remove(i);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                Element::Node(point) => point.remove(node, center),
+            }
+        } else {
+            match self.far.as_mut() {
+                Element::Leaf(leaf) => {
+                    for (i, j) in leaf.nodes.iter().enumerate() {
+                        if j == node {
+                            leaf.nodes.remove(i);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                Element::Node(point) => point.remove(node, center),
+            }
+        }
+    }
 }
 
 impl Property {
