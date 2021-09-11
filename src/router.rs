@@ -172,18 +172,19 @@ impl Point {
     }
 
     fn remove(&mut self, node: &Node, center: &Center) -> bool {
+        let mut status: bool = false;
         if self.in_range_far(node, center) {
             match self.far.as_mut() {
                 Element::Leaf(leaf) => {
                     for (i, j) in leaf.nodes.iter().enumerate() {
                         if j == node {
                             leaf.nodes.remove(i);
-                            return true;
+                            status = true;
+                            break;
                         }
                     }
-                    return false;
                 }
-                Element::Node(point) => point.remove(node, center),
+                Element::Node(point) => status = point.remove(node, center),
             }
         } else {
             match self.far.as_mut() {
@@ -191,14 +192,31 @@ impl Point {
                     for (i, j) in leaf.nodes.iter().enumerate() {
                         if j == node {
                             leaf.nodes.remove(i);
-                            return true;
+                            status = true;
+                            break;
                         }
                     }
-                    return false;
                 }
-                Element::Node(point) => point.remove(node, center),
+                Element::Node(point) => status = point.remove(node, center),
             }
         }
+
+        return status;
+    }
+
+    fn len(&self) -> usize {
+        let mut length = 0;
+        match self.near.as_ref() {
+            Element::Leaf(leaf) => length += leaf.len(),
+            Element::Node(point) => length += point.len(),
+        }
+
+        match self.far.as_ref() {
+            Element::Leaf(leaf) => length += leaf.len(),
+            Element::Node(point) => length += point.len(),
+        }
+
+        return length;
     }
 }
 
