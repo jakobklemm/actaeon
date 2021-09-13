@@ -38,7 +38,9 @@ enum Element {
 struct Point {
     property: Property,
     near: Box<Element>,
-    far: Box<Element>,
+    /// the far side can only ever be a Leaf, only the center can get
+    /// split.
+    far: Box<Leaf>,
 }
 
 /// Stores a maximum of "limit" nodes, sorted by age / time. The first
@@ -57,7 +59,7 @@ impl Point {
         Self {
             property,
             near: Box::new(Element::Leaf(near)),
-            far: Box::new(Element::Leaf(far)),
+            far: Box::new(far),
         }
     }
 
@@ -85,7 +87,7 @@ impl Point {
                     let new = Self {
                         property: self.property.clone(),
                         near: Box::new(Element::Leaf(near)),
-                        far: Box::new(Element::Leaf(far)),
+                        far: Box::new(far),
                     };
                     self.near = Box::new(Element::Node(new));
                     Ok(())
@@ -98,10 +100,8 @@ impl Point {
     }
 
     fn add_far(&mut self, node: Node) {
-        match self.far.as_mut() {
-            Element::Leaf(leaf) => leaf.add(node),
-            Element::Node(point) => point.add_far(node),
-        }
+        let mut leaf = self.far.as_mut();
+        leaf.add(node);
     }
 
     fn in_range_near(&self, node: &Node, center: &Center) -> bool {
@@ -112,10 +112,7 @@ impl Point {
     }
 
     fn in_range_far(&self, node: &Node, center: &Center) -> bool {
-        match self.far.as_ref() {
-            Element::Leaf(leaf) => leaf.in_range(node, center),
-            Element::Node(point) => point.in_range_far(node, center),
-        }
+        self.far.as_ref().in_range(node, center)
     }
 
     fn get(&self, node: &Node, center: &Center, count: usize) -> Vec<Node> {
@@ -159,35 +156,29 @@ impl Point {
     /// returns the leaf a node should belong into.
     fn find(&self, node: &Node, center: &Center) -> Leaf {
         if self.in_range_far(node, center) {
-            match self.far.as_ref() {
-                Element::Leaf(leaf) => leaf.clone(),
-                Element::Node(point) => point.find(node, center),
-            }
+            self.far.as_ref().clone()
         } else {
-            match self.far.as_ref() {
+            match self.near.as_ref() {
                 Element::Leaf(leaf) => leaf.clone(),
                 Element::Node(point) => point.find(node, center),
             }
         }
     }
 
+    /// TODO: Rejoin.
     fn remove(&mut self, node: &Node, center: &Center) -> bool {
         let mut status: bool = false;
         if self.in_range_far(node, center) {
-            match self.far.as_mut() {
-                Element::Leaf(leaf) => {
-                    for (i, j) in leaf.nodes.iter().enumerate() {
-                        if j == node {
-                            leaf.nodes.remove(i);
-                            status = true;
-                            break;
-                        }
-                    }
+            let leaf = self.far.as_mut();
+            for (i, j) in leaf.nodes.iter().enumerate() {
+                if j == node {
+                    leaf.nodes.remove(i);
+                    status = true;
+                    break;
                 }
-                Element::Node(point) => status = point.remove(node, center),
             }
         } else {
-            match self.far.as_mut() {
+            match self.near.as_mut() {
                 Element::Leaf(leaf) => {
                     for (i, j) in leaf.nodes.iter().enumerate() {
                         if j == node {
@@ -211,10 +202,7 @@ impl Point {
             Element::Node(point) => length += point.len(),
         }
 
-        match self.far.as_ref() {
-            Element::Leaf(leaf) => length += leaf.len(),
-            Element::Node(point) => length += point.len(),
-        }
+        length += self.far.as_ref().len();
 
         return length;
     }
@@ -439,6 +427,97 @@ mod tests {
         leaf.add(node);
         leaf.dedup();
         assert_eq!(leaf.len(), 1);
+    }
+
+    #[test]
+    fn test_add_point() {
+        let mut point = gen_point();
+        let node = gen_node("test");
+        let mut cb: [u8; 32] = [0; 32];
+        cb[0] = 2;
+        let secret = SecretKey::from_slice(&cb).unwrap();
+        let center = Center::new(secret, String::from(""), 42);
+        point.add(node, &center).unwrap();
+        if let Element::Leaf(leaf) = point.near.as_ref() {
+            assert_eq!(leaf.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_add_point_far() {
+        let mut point = gen_point();
+        let node = gen_node("test");
+        let mut cb: [u8; 32] = [0; 32];
+        cb[0] = 42;
+        let secret = SecretKey::from_slice(&cb).unwrap();
+        let center = Center::new(secret, String::from(""), 42);
+        point.add(node, &center).unwrap();
+        assert_eq!(point.far.as_ref().len(), 1);
+    }
+
+    #[test]
+    fn test_add_point_split() {
+        let mut point = gen_point();
+        let mut cb: [u8; 32] = [0; 32];
+        cb[0] = 2;
+        let secret = SecretKey::from_slice(&cb).unwrap();
+        let center = Center::new(secret, String::from(""), 42);
+        let node = gen_node("test");
+        point.add(node, &center).unwrap();
+        let node = gen_node("test2");
+        point.add(node, &center).unwrap();
+        assert_eq!(point.far.as_ref().len(), 0);
+        if let Element::Node(p) = point.near.as_ref() {
+            assert_eq!(p.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_add_point_split_deep() {
+        let mut point = gen_point();
+        let mut cb: [u8; 32] = [0; 32];
+        cb[0] = 2;
+        let secret = SecretKey::from_slice(&cb).unwrap();
+        let center = Center::new(secret, String::from(""), 42);
+        let node = gen_node("test");
+        point.add(node, &center).unwrap();
+        let node = gen_node("test2");
+        point.add(node, &center).unwrap();
+        let node = gen_node("test3");
+        assert_eq!(point.add(node, &center).is_err(), true);
+    }
+
+    #[test]
+    fn test_bytes() {
+        // simple test to assure the right byte xor calculation.
+        let node = gen_node("d");
+        let mut cb: [u8; 32] = [0; 32];
+        cb[0] = 2;
+        let secret = SecretKey::from_slice(&cb).unwrap();
+        let center = Center::new(secret, String::from(""), 42);
+        let distance = node.address ^ center.public;
+        assert_eq!(distance[0], 103);
+    }
+
+    fn gen_point() -> Point {
+        let prop = Property {
+            side: Side::Near,
+            ll: 0,
+            ul: 255,
+        };
+        let propn = Property {
+            side: Side::Near,
+            ll: 0,
+            ul: 127,
+        };
+        let propf = Property {
+            side: Side::Near,
+            ll: 128,
+            ul: 255,
+        };
+        let near = Leaf::new(1, propn);
+        let far = Leaf::new(1, propf);
+        Point::new(prop, near, far)
     }
 
     fn gen_leaf(l: usize) -> Leaf {
