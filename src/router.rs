@@ -3,6 +3,7 @@
 //! The router is responsible for storing and sorting nodes as well as
 //! providing callers with the information required to send messages
 //! through the system.
+//! TODO: Add try_add testing.
 
 use crate::bucket::Bucket;
 use crate::error::Error;
@@ -18,19 +19,19 @@ pub struct Table {
     limit: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Property {
     lower: u8,
     upper: u8,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Element {
     Split(Split, Property),
     Leaf(Bucket, Property),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Split {
     near: Box<Element>,
     far: Box<Element>,
@@ -97,7 +98,7 @@ impl Element {
 
 impl Split {
     fn try_add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
-        if self.near.in_range(&node, center) {
+        if self.in_range_near(&node, center) {
             self.near.try_add(node, center)
         } else {
             self.far.try_add(node, center)
@@ -105,7 +106,7 @@ impl Split {
     }
 
     fn add(&mut self, node: Node, center: &Center) {
-        if self.near.in_range(&node, center) {
+        if self.in_range_near(&node, center) {
             self.near.add(node, center)
         } else {
             self.far.add(node, center)
@@ -134,7 +135,7 @@ impl Property {
     /// TODO: Reduce clone calls.
     fn in_range(&self, node: &Node, center: &Center) -> bool {
         let index = (node.address.clone() ^ center.public.clone())[0];
-        self.lower < index && self.upper > index
+        self.lower <= index && self.upper > index
     }
 
     fn split(&self) -> (Self, Self) {
@@ -158,6 +159,18 @@ impl Property {
 mod tests {
     use super::*;
     use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
+
+    #[test]
+    fn test_property_in_range() {
+        let p = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let node = gen_node_near();
+        let center = gen_center_near();
+        assert_eq!(p.in_range(&node, &center), true);
+        assert_eq!((node.address ^ center.public)[0], 0);
+    }
 
     #[test]
     fn test_property_split_root() {
@@ -243,6 +256,113 @@ mod tests {
         assert_eq!(elem.len(), 4);
     }
 
+    #[test]
+    fn test_split_add_near_top() {
+        let mut split = gen_split();
+        let node = gen_node_near();
+        let center = gen_center_near();
+        split.add(node, &center);
+        assert_eq!(split.len(), 1);
+        assert_eq!(split.near.len(), 1);
+        assert_eq!(split.far.len(), 0);
+    }
+
+    #[test]
+    fn test_split_add_far_top() {
+        let mut split = gen_split();
+        let node = gen_node_far();
+        let center = gen_center_near();
+        let a = (node.address.clone() ^ center.public.clone())[0];
+        split.add(node, &center);
+        assert_eq!(split.len(), 1);
+        assert_eq!(a, 255);
+        assert_eq!(split.far.len(), 1);
+    }
+
+    #[test]
+    fn test_split_add_deep() {
+        let mut split = Split {
+            near: Box::new(Element::Split(
+                Split {
+                    near: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 0,
+                            upper: 63,
+                        },
+                    )),
+                    far: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 64,
+                            upper: 127,
+                        },
+                    )),
+                },
+                Property {
+                    lower: 0,
+                    upper: 127,
+                },
+            )),
+            far: Box::new(Element::Leaf(
+                Bucket::new(20),
+                Property {
+                    lower: 128,
+                    upper: 255,
+                },
+            )),
+        };
+        assert_eq!(split.len(), 0);
+
+        let center = gen_center_near();
+        let node = gen_node_near();
+        split.add(node, &center);
+        assert_eq!(split.len(), 1);
+        assert_eq!(split.near.as_ref().len(), 1);
+        assert_eq!(split.far.as_ref().len(), 0);
+
+        let node = gen_node_far();
+        split.add(node, &center);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split.near.as_ref().len(), 1);
+        assert_eq!(split.far.as_ref().len(), 1);
+    }
+
+    #[test]
+    fn test_split_in_range() {
+        let split = gen_split();
+        let center = gen_center_near();
+        let node = gen_node_near();
+        assert_eq!(split.in_range_near(&node, &center), true);
+    }
+
+    #[test]
+    fn test_split_in_range_far() {
+        let split = gen_split();
+        let center = gen_center_near();
+        let node = gen_node_far();
+        assert_eq!(split.in_range_near(&node, &center), false);
+    }
+
+    fn gen_split() -> Split {
+        let near = Bucket::new(20);
+        let np = Property {
+            lower: 0,
+            upper: 127,
+        };
+        let near = Element::Leaf(near, np);
+        let far = Bucket::new(20);
+        let fp = Property {
+            lower: 128,
+            upper: 255,
+        };
+        let far = Element::Leaf(far, fp);
+        Split {
+            near: Box::new(near),
+            far: Box::new(far),
+        }
+    }
+
     fn gen_bucket() -> Bucket {
         let mut root = Bucket::new(20);
         root.add(gen_node("first"));
@@ -255,10 +375,36 @@ mod tests {
         Node::new(Address::generate(s).unwrap(), None)
     }
 
+    fn gen_node_near() -> Node {
+        let addr = Address::from_bytes([0; 32]).unwrap();
+        Node::new(addr, None)
+    }
+
+    fn gen_node_far() -> Node {
+        let addr = Address::from_bytes([255; 32]).unwrap();
+        Node::new(addr, None)
+    }
+
     fn gen_center() -> Center {
         let mut b = [0; 32];
         b[0] = 42;
         let s = SecretKey::from_slice(&b).unwrap();
         Center::new(s, String::from(""), 8080)
+    }
+
+    fn gen_center_near() -> Center {
+        let secret = [0; 32];
+        let secret = SecretKey::from_slice(&secret).unwrap();
+        let public = [0; 32];
+
+        let b = [0; 32];
+        let s = SecretKey::from_slice(&b).unwrap();
+        let base = Center::new(s, String::from(""), 8080);
+
+        Center {
+            secret,
+            public: Address::from_bytes(public).unwrap(),
+            ..base
+        }
     }
 }
