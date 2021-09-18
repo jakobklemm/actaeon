@@ -4,546 +4,261 @@
 //! providing callers with the information required to send messages
 //! through the system.
 
+use crate::bucket::Bucket;
 use crate::error::Error;
 use crate::node::{Address, Center, Node};
 
 /// Binary tree structure holding the k-Buckets.
 ///
-/// TODO: Replace direct root with interior mutability.
+/// TODO: Pass Center everywhere or store 'distance' with each address
+/// / node?
 pub struct Table {
     root: Element,
     center: Center,
     limit: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 struct Property {
-    /// Might not be required since Near == ll: 0?
-    side: Side,
-    ll: u8,
-    ul: u8,
+    lower: u8,
+    upper: u8,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Side {
-    Far,
-    Near,
-}
-
+#[derive(Clone)]
 enum Element {
-    Node(Point),
-    Leaf(Leaf),
+    Split(Split, Property),
+    Leaf(Bucket, Property),
 }
 
-struct Point {
-    property: Property,
+#[derive(Clone)]
+struct Split {
     near: Box<Element>,
-    /// the far side can only ever be a Leaf, only the center can get
-    /// split.
-    far: Box<Leaf>,
+    far: Box<Element>,
 }
 
-/// Stores a maximum of "limit" nodes, sorted by age / time. The first
-/// element in the array is the oldest one. This equals a Kademlia
-/// k-Bucket. Since it is only used inside the binary routing tree it
-/// simply called Leaf.
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct Leaf {
-    property: Property,
-    nodes: Vec<Node>,
-    limit: usize,
-}
-
-impl Point {
-    fn new(property: Property, near: Leaf, far: Leaf) -> Self {
-        Self {
-            property,
-            near: Box::new(Element::Leaf(near)),
-            far: Box::new(far),
-        }
-    }
-
-    fn add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
-        if self.in_range_near(&node, center) {
-            self.add_near(node, center)
-        } else if self.in_range_far(&node, center) {
-            self.add_far(node);
-            Ok(())
-        } else {
-            Err(Error::Invalid(String::from("node not in range")))
-        }
-    }
-
-    /// TODO: Reduce clone calls.
-    fn add_near(&mut self, node: Node, center: &Center) -> Result<(), Error> {
-        match self.near.as_mut() {
-            Element::Leaf(leaf) => {
-                let res = leaf.try_add(node, center);
-                // this function should only get called if the node is
-                // in range, therefor try_add should only return
-                // Error::Full.
-                if res.is_err() {
-                    let (near, far) = leaf.clone().split(center);
-                    let new = Self {
-                        property: self.property.clone(),
-                        near: Box::new(Element::Leaf(near)),
-                        far: Box::new(far),
-                    };
-                    self.near = Box::new(Element::Node(new));
-                    Ok(())
-                } else {
-                    Ok(())
+impl Element {
+    fn try_add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
+        match self {
+            Self::Split(s, p) => {
+                if !p.in_range(&node, &center) {
+                    return Err(Error::Invalid(String::from("not in range")));
                 }
+                s.try_add(node, center)
             }
-            Element::Node(point) => point.add_near(node, center),
-        }
-    }
-
-    fn add_far(&mut self, node: Node) {
-        let mut leaf = self.far.as_mut();
-        leaf.add(node);
-    }
-
-    fn in_range_near(&self, node: &Node, center: &Center) -> bool {
-        match self.near.as_ref() {
-            Element::Leaf(leaf) => leaf.in_range(node, center),
-            Element::Node(point) => point.in_range_near(node, center),
-        }
-    }
-
-    fn in_range_far(&self, node: &Node, center: &Center) -> bool {
-        self.far.as_ref().in_range(node, center)
-    }
-
-    fn get(&self, node: &Node, center: &Center, count: usize) -> Vec<Node> {
-        let mut initial = self.find(node, center).nodes;
-        if initial.len() < count {
-            for offset in 0..255 {
-                if node.address.as_bytes()[0] + offset == 255 {
-                    let mut bytes = node.address.as_bytes();
-                    bytes[0] = bytes[0] + offset;
-                    let search_addr = Address::from_bytes(bytes);
-                    if search_addr.is_err() {
-                        continue;
-                    }
-                    let search_node = Node::new(search_addr.unwrap(), None);
-                    let mut more = self.get(&search_node, center, count);
-                    initial.append(&mut more);
-                    if initial.len() > count {
-                        break;
-                    }
+            Self::Leaf(b, p) => {
+                if !p.in_range(&node, &center) {
+                    return Err(Error::Invalid(String::from("not in range")));
                 }
-                if node.address.as_bytes()[0] - offset == 255 {
-                    let mut bytes = node.address.as_bytes();
-                    bytes[0] = bytes[0] - offset;
-                    let search_addr = Address::from_bytes(bytes);
-                    if search_addr.is_err() {
-                        continue;
-                    }
-                    let search_node = Node::new(search_addr.unwrap(), None);
-                    let mut more = self.get(&search_node, center, count);
-                    initial.append(&mut more);
-                    if initial.len() > count {
-                        break;
-                    }
-                }
-            }
-        };
-
-        return initial;
-    }
-
-    /// returns the leaf a node should belong into.
-    fn find(&self, node: &Node, center: &Center) -> Leaf {
-        if self.in_range_far(node, center) {
-            self.far.as_ref().clone()
-        } else {
-            match self.near.as_ref() {
-                Element::Leaf(leaf) => leaf.clone(),
-                Element::Node(point) => point.find(node, center),
+                b.try_add(node)
             }
         }
     }
 
-    /// TODO: Rejoin.
-    fn remove(&mut self, node: &Node, center: &Center) -> bool {
-        let mut status: bool = false;
-        if self.in_range_far(node, center) {
-            let leaf = self.far.as_mut();
-            for (i, j) in leaf.nodes.iter().enumerate() {
-                if j == node {
-                    leaf.nodes.remove(i);
-                    status = true;
-                    break;
+    fn add(&mut self, node: Node, center: &Center) {
+        match self {
+            Self::Split(s, _) => s.add(node, center),
+            Self::Leaf(b, _) => b.add(node),
+        }
+    }
+
+    fn split(self, center: &Center) -> Option<Self> {
+        match self {
+            Self::Split(s, p) => return None,
+            Self::Leaf(b, p) => {
+                // Only "near" elements can be split.
+                if p.lower != 0 {
+                    return None;
                 }
-            }
-        } else {
-            match self.near.as_mut() {
-                Element::Leaf(leaf) => {
-                    for (i, j) in leaf.nodes.iter().enumerate() {
-                        if j == node {
-                            leaf.nodes.remove(i);
-                            status = true;
-                            break;
-                        }
-                    }
-                }
-                Element::Node(point) => status = point.remove(node, center),
+                let (near, far) = b.split(center, p.upper);
+                let (near_p, far_p) = p.split();
+                let split = Split {
+                    near: Box::new(Self::Leaf(near, near_p)),
+                    far: Box::new(Self::Leaf(far, far_p)),
+                };
+                Some(Self::Split(split, p))
             }
         }
-
-        return status;
     }
 
     fn len(&self) -> usize {
-        let mut length = 0;
-        match self.near.as_ref() {
-            Element::Leaf(leaf) => length += leaf.len(),
-            Element::Node(point) => length += point.len(),
+        match self {
+            Self::Split(s, _) => s.len(),
+            Self::Leaf(b, _) => b.len(),
         }
+    }
 
-        length += self.far.as_ref().len();
+    fn in_range(&self, node: &Node, center: &Center) -> bool {
+        match self {
+            Self::Split(_, p) => p.in_range(node, center),
+            Self::Leaf(_, p) => p.in_range(node, center),
+        }
+    }
+}
 
+impl Split {
+    fn try_add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
+        if self.near.in_range(&node, center) {
+            self.near.try_add(node, center)
+        } else {
+            self.far.try_add(node, center)
+        }
+    }
+
+    fn add(&mut self, node: Node, center: &Center) {
+        if self.near.in_range(&node, center) {
+            self.near.add(node, center)
+        } else {
+            self.far.add(node, center)
+        }
+    }
+
+    fn len(&self) -> usize {
+        let mut length = self.far.len();
+        match &*self.near {
+            Element::Leaf(b, _) => length += b.len(),
+            Element::Split(s, _) => length += s.len(),
+        }
         return length;
+    }
+
+    fn in_range_near(&self, node: &Node, center: &Center) -> bool {
+        self.near.in_range(node, center)
+    }
+
+    fn in_range_far(&self, node: &Node, center: &Center) -> bool {
+        self.far.in_range(node, center)
     }
 }
 
 impl Property {
-    /// Determins whether a node is in range of a bucket / the
-    /// properties.
+    /// TODO: Reduce clone calls.
     fn in_range(&self, node: &Node, center: &Center) -> bool {
-        // TODO: Fix clone?
         let index = (node.address.clone() ^ center.public.clone())[0];
-        self.ll < index && self.ul > index
-    }
-}
-
-impl Leaf {
-    /// Creates a new empty bucket and stores the provided limit. It
-    /// usually has to be declared as mutable, since sorting and
-    /// adding require mutable references. This might get replaced by
-    /// interior mutability in the future. It should be enough to just
-    /// store the nodes in a RefCell, since everything else stays
-    /// constant.
-    fn new(limit: usize, property: Property) -> Self {
-        Self {
-            nodes: Vec::new(),
-            property,
-            limit,
-        }
+        self.lower < index && self.upper > index
     }
 
-    /// Sorts the nodes in the bucket with the existing Ord
-    /// implementation. THe first element in the Vector will be the
-    /// oldest one, the last the oldest.
-    fn sort(&mut self) {
-        self.nodes.sort();
-    }
-
-    /// Adds a node to a bucket. If the bucket is full, an error is
-    /// returned. This function does not follow any of the kademlia
-    /// rules and is intended to be used as a first step, before
-    /// specifiying the behavior for full buckets. Currently a
-    /// dedicated error type is used for situations like this:
-    /// Error::Full. Should the node not belong in this bucket, the
-    /// function will also fail.
-    fn try_add(&mut self, node: Node, center: &Center) -> Result<(), Error> {
-        // TODO: Don't clone?
-        if !self.in_range(&node, &center) {
-            return Err(Error::Invalid(String::from("mismatched bucket")));
-        } else if self.len() == self.limit {
-            return Err(Error::Full);
-        } else {
-            self.nodes.push(node);
-            return Ok(());
-        }
-    }
-
-    /// Adds a new node the the existing bucket, in which the center
-    /// is not. It roughly follows the Kademlia update rules:
-    ///
-    /// - If there is still space in the bucket, the node is simply
-    /// appended.
-    ///
-    /// - If there is no space, the oldest node gets replaced, but
-    /// only if it is currently not reachable. This part requires the
-    /// nodes in the table to get checked by a dedicated process. No
-    /// status checks are happening in the table.
-    ///
-    /// This function will not split buckets or create new, should the
-    /// bucket be full the node is simply disregarded.
-    fn add(&mut self, node: Node) {
-        if self.len() < self.limit {
-            self.nodes.push(node);
-            self.sort();
-        } else {
-            if let Some(first) = self.nodes.first_mut() {
-                // instead of manually checking the status of the
-                // oldest node it is assumed that it is updated by a
-                // dedicated process.
-                if !first.is_reachable() {
-                    *first = node;
-                }
-                self.sort();
-            }
-        }
-    }
-
-    /// Turns one Leaf (Bucket) into to separate halves. It does't
-    /// check for size or size. It takes ownership of the Leaf and
-    /// returns two new ones as a tuple. The first one is Near, the
-    /// second one is Far.
-    fn split(mut self, center: &Center) -> (Self, Self) {
-        let near_property = Property {
-            side: Side::Near,
-            ll: self.property.ll,
-            ul: self.property.ul / 2,
+    fn split(&self) -> (Self, Self) {
+        let lower = Self {
+            lower: self.lower,
+            upper: self.upper / 2,
         };
-
-        let far_property = Property {
-            side: Side::Far,
-            ll: (self.property.ul / 2) + 1,
-            ul: self.property.ul,
+        let upper = Self {
+            lower: (self.upper / 2) + 1,
+            upper: self.upper,
         };
-
-        let mut near = Leaf::new(self.limit, near_property);
-        let mut far = Leaf::new(self.limit, far_property);
-
-        for i in self.nodes {
-            if near.in_range(&i, center) {
-                near.add(i);
-            } else {
-                far.add(i);
-            }
-        }
-
-        return (near, far);
+        (lower, upper)
     }
 
-    /// Wrapper around Property::in_range method.
-    fn in_range(&self, node: &Node, center: &Center) -> bool {
-        self.property.in_range(node, center)
-    }
-
-    /// TOOD: Add dedup by key.
-    fn dedup(&mut self) {
-        self.sort();
-        self.nodes.dedup();
-    }
-
-    /// Wrapper around the length of the nodes array.
-    fn len(&self) -> usize {
-        self.nodes.len()
+    fn is_near(&self) -> bool {
+        self.lower == 0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sodiumoxide::crypto::box_;
     use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
 
     #[test]
-    fn test_leaf_add() {
-        let mut leaf = gen_leaf(20);
-        let node = gen_node("test");
+    fn test_property_split_root() {
+        let p = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let (l, u) = p.split();
+        assert_eq!(l.lower, 0);
+        assert_eq!(l.upper, 127);
+        assert_eq!(u.lower, 128);
+        assert_eq!(u.upper, 255);
+    }
+
+    #[test]
+    fn test_property_split_lower() {
+        let p = Property {
+            lower: 0,
+            upper: 63,
+        };
+        let (l, u) = p.split();
+        assert_eq!(l.lower, 0);
+        assert_eq!(l.upper, 31);
+        assert_eq!(u.lower, 32);
+        assert_eq!(u.upper, 63);
+    }
+
+    #[test]
+    fn test_property_near() {
+        let p = Property {
+            lower: 0,
+            upper: 63,
+        };
+        let (l, u) = p.split();
+        assert_eq!(l.is_near(), true);
+        assert_eq!(u.is_near(), false);
+    }
+
+    #[test]
+    fn test_element_split_root() {
+        let prop = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let buck = gen_bucket();
+        let elem = Element::Leaf(buck, prop);
         let center = gen_center();
-        let ret = leaf.try_add(node, &center);
-        assert_eq!(ret.is_err(), false);
-    }
-
-    #[test]
-    fn test_leaf_add_error() {
-        let mut leaf = gen_leaf(1);
-        let node = gen_node("test");
-        let center = gen_center();
-        leaf.try_add(node, &center).unwrap();
-        let node = gen_node("test2");
-        let ret = leaf.try_add(node, &center);
-        assert_eq!(ret.is_err(), true);
-    }
-
-    #[test]
-    fn test_leaf_add_error_lim() {
-        let mut leaf = gen_leaf(1);
-        let node = gen_node("test");
-        let center = gen_center();
-        leaf.try_add(node, &center).unwrap();
-        let node = gen_node("test2");
-        let ret = leaf.try_add(node, &center);
-        assert_eq!(ret.is_err(), true);
-    }
-
-    #[test]
-    fn test_leaf_add_disregard() {
-        let mut leaf = gen_leaf(1);
-        let node = gen_node("test");
-        leaf.add(node);
-        let node = gen_node("test2");
-        leaf.add(node);
-        assert_eq!(leaf.len(), 1);
-    }
-
-    #[test]
-    fn test_leaf_add_error_range() {
-        let mut leaf = gen_lim_leaf(10);
-        let node = gen_node("test");
-        let center = gen_center();
-        let ret = leaf.try_add(node, &center);
-        assert_eq!(ret.is_err(), true);
-    }
-
-    #[test]
-    fn test_leaf_split() {
-        let mut leaf = gen_leaf(2);
-        let node = gen_node("test");
-        leaf.add(node);
-        let node = gen_node("test2");
-        leaf.add(node);
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 42;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-
-        let (l1, l2) = leaf.split(&center);
-        assert_eq!(l1.len(), 0);
-        assert_eq!(l2.len(), 2);
-    }
-
-    #[test]
-    fn test_leaf_range() {
-        let leaf = gen_lim_leaf(10);
-        let node = gen_node("abc");
-        let center = gen_center();
-        assert_eq!(leaf.in_range(&node, &center), false);
-    }
-
-    #[test]
-    fn test_leaf_dedup() {
-        let mut leaf = gen_leaf(10);
-        let node = gen_node("abc");
-        leaf.add(node);
-        let node = gen_node("abc");
-        leaf.add(node);
-        leaf.dedup();
-        assert_eq!(leaf.len(), 1);
-    }
-
-    #[test]
-    fn test_add_point() {
-        let mut point = gen_point();
-        let node = gen_node("test");
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 2;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-        point.add(node, &center).unwrap();
-        if let Element::Leaf(leaf) = point.near.as_ref() {
-            assert_eq!(leaf.len(), 1);
+        let split = elem.split(&center).unwrap();
+        match split {
+            Element::Split(s, p) => {
+                assert_eq!(p.upper, 255);
+                assert_eq!(s.len(), 3);
+                assert_eq!(s.near.as_ref().len(), 2);
+            }
+            Element::Leaf(_, _) => assert_eq!("invalid split", ""),
         }
     }
 
     #[test]
-    fn test_add_point_far() {
-        let mut point = gen_point();
-        let node = gen_node("test");
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 42;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-        point.add(node, &center).unwrap();
-        assert_eq!(point.far.as_ref().len(), 1);
+    fn test_element_split_far() {
+        let prop = Property {
+            lower: 128,
+            upper: 255,
+        };
+        let buck = gen_bucket();
+        let elem = Element::Leaf(buck, prop);
+        let center = gen_center();
+        let split = elem.split(&center).is_none();
+        assert_eq!(split, true);
     }
 
     #[test]
-    fn test_add_point_split() {
-        let mut point = gen_point();
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 2;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-        let node = gen_node("test");
-        point.add(node, &center).unwrap();
-        let node = gen_node("test2");
-        point.add(node, &center).unwrap();
-        assert_eq!(point.far.as_ref().len(), 0);
-        if let Element::Node(p) = point.near.as_ref() {
-            assert_eq!(p.len(), 2);
-        }
-    }
-
-    #[test]
-    fn test_add_point_split_deep() {
-        let mut point = gen_point();
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 2;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-        let node = gen_node("test");
-        point.add(node, &center).unwrap();
-        let node = gen_node("test2");
-        point.add(node, &center).unwrap();
-        let node = gen_node("test3");
-        assert_eq!(point.add(node, &center).is_err(), true);
-    }
-
-    #[test]
-    fn test_bytes() {
-        // simple test to assure the right byte xor calculation.
-        let node = gen_node("d");
-        let mut cb: [u8; 32] = [0; 32];
-        cb[0] = 2;
-        let secret = SecretKey::from_slice(&cb).unwrap();
-        let center = Center::new(secret, String::from(""), 42);
-        let distance = node.address ^ center.public;
-        assert_eq!(distance[0], 103);
-    }
-
-    fn gen_point() -> Point {
+    fn test_element_add_to_leaf() {
+        let bucket = gen_bucket();
         let prop = Property {
-            side: Side::Near,
-            ll: 0,
-            ul: 255,
+            lower: 0,
+            upper: 255,
         };
-        let propn = Property {
-            side: Side::Near,
-            ll: 0,
-            ul: 127,
-        };
-        let propf = Property {
-            side: Side::Near,
-            ll: 128,
-            ul: 255,
-        };
-        let near = Leaf::new(1, propn);
-        let far = Leaf::new(1, propf);
-        Point::new(prop, near, far)
+        let mut elem = Element::Leaf(bucket, prop);
+        let node = gen_node("added");
+        let center = gen_center();
+        elem.add(node, &center);
+        assert_eq!(elem.len(), 4);
     }
 
-    fn gen_leaf(l: usize) -> Leaf {
-        let prop = Property {
-            side: Side::Near,
-            ll: 0,
-            ul: 255,
-        };
-        Leaf::new(l, prop)
-    }
-
-    fn gen_lim_leaf(l: usize) -> Leaf {
-        let prop = Property {
-            side: Side::Near,
-            ll: 0,
-            ul: 0,
-        };
-        Leaf::new(l, prop)
-    }
-
-    fn gen_center() -> Center {
-        let (_, s) = box_::gen_keypair();
-        Center::new(s, "a".to_string(), 42)
+    fn gen_bucket() -> Bucket {
+        let mut root = Bucket::new(20);
+        root.add(gen_node("first"));
+        root.add(gen_node("second"));
+        root.add(gen_node("another"));
+        root
     }
 
     fn gen_node(s: &str) -> Node {
         Node::new(Address::generate(s).unwrap(), None)
+    }
+
+    fn gen_center() -> Center {
+        let mut b = [0; 32];
+        b[0] = 42;
+        let s = SecretKey::from_slice(&b).unwrap();
+        Center::new(s, String::from(""), 8080)
     }
 }
