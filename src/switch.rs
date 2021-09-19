@@ -1,11 +1,13 @@
 //! # Switch
+//!
+//! The switch is responsible for handling connections and messages as
+//! well as the cache on a dedicated thread. This module does not
+//! implement the actual listening logic, since that component is
+//! supposed to be more modularized. Instead it handles the thread and
+//! the cache, each protocol then has its own module.
 
-pub mod adapter;
-use self::adapter::Mode;
-use crate::error::Error;
 use crate::transaction::Transaction;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
 
 /// Each message being sent between the Listener Thead and User Thread
 /// is either a UserAction or a SwitchAction, only UserAction get
@@ -34,6 +36,34 @@ pub enum Action {
     CacheFull,
 }
 
+/// Starting the switch will create both Interface and Switch objects.
+/// The Interface will be passed up and to the user / instance. From
+/// there the user can interact (receive messages) with the listener.
+/// Currently the communication only works in one direction, sending
+/// messages will currently not utilize the dedicated thread. In the
+/// future this will get integrated into the thread and also include a
+/// two-directional channel system.
+pub struct Interface {
+    /// The SwitchInterface will implement recv/0 and try_recv/0
+    /// functions, which will internally receive messages from the
+    /// channel.
+    receiver: Receiver<Command>,
+}
+
+/// Currently the system requires a dedicated thread for the listening
+/// server, which will autoamtically get started. The thread will hold
+/// a Switch object and send messages through the channel.
+pub struct Switch {
+    /// mpsc sender component to send incoming messages to the user.
+    /// This will only be done for messages that are intended for the
+    /// user, not forwarded messages in the kademlia system.
+    sender: Sender<Command>,
+    /// New transactions that are intended for the user will be
+    /// checked against the cache to see if they are duplicates.
+    /// TODO: Define term for "messages intended for the user"
+    cache: Cache,
+}
+
 /// A cache of recent Transaction. Since each message might get
 /// received multiple times, to avoid processing it more than once a
 /// cache is introduced, that stores all recent messages. It has a
@@ -55,37 +85,16 @@ struct Cache {
     limit: usize,
 }
 
-/// Starting the switch will create both SwitchInterface and Switch
-/// objects. The SwitchInterface will be passed up and to the user /
-/// instance. From there the user can interact (receive messages) with
-/// the listener. Currently the communication only works in one
-/// direction, sending messages will currently not utilize the
-/// dedicated thread. In the future this will get integrated into the
-/// thread and also include a two-directional channel system.
-pub struct SwitchInterface {
-    /// The SwitchInterface will implement recv/0 and try_recv/0
-    /// functions, which will internally receive messages from the
-    /// channel.
-    channel: Receiver<Command>,
-}
-
-/// Currently the system requires a dedicated thread for the listening
-/// server, which will autoamtically get started. The thread will hold
-/// a Switch object and send messages through the channel.
-pub struct Switch {
-    /// mpsc sender component to send incoming messages to the user.
-    /// This will only be done for messages that are intended for the
-    /// user, not forwarded messages in the kademlia system.
-    channel: Sender<Command>,
-    /// New transactions that are intended for the user will be
-    /// checked against the cache to see if they are duplicates.
-    /// TODO: Define term for "messages intended for the user"
-    recent: Cache,
-    /// Since the system is suppose to be usable with different
-    /// transport layers and protocols a trait object of Adapter is
-    /// used to represent any adapter. By default the system will use
-    /// a TcpListener.
-    handler: Box<dyn adapter::Adapter + Send>,
+impl Switch {
+    /// Creates a new (Switch, Interface) combo, creating the Cache
+    /// and staritng the channel.
+    fn new(limit: usize) -> (Switch, Interface) {
+        let (sender, receiver) = mpsc::channel();
+        let cache = Cache::new(limit);
+        let switch = Switch { sender, cache };
+        let interface = Interface { receiver };
+        (switch, interface)
+    }
 }
 
 impl Cache {
@@ -116,57 +125,13 @@ impl Cache {
     }
 }
 
-impl Switch {
-    /// Creates a new pair of Switch and SwitchInterface and returns
-    /// them both. They need to be created at the same time, since
-    /// they both require access to the same channel. There is no
-    /// dedicated SwitchInterface::new, the interface has to be
-    /// created through this funciton.
-    pub fn new(
-        limit: usize,
-        adapter: Box<dyn adapter::Adapter + Send>,
-    ) -> (Switch, SwitchInterface) {
-        let (tx, rx) = mpsc::channel::<Command>();
-        let interface = SwitchInterface { channel: rx };
-        let cache = Cache::new(limit);
-        let switch = Switch {
-            recent: cache,
-            handler: adapter,
-            channel: tx,
-        };
-        (switch, interface)
-    }
-
-    /// Currently the behavior of this function is hard coded, in the
-    /// future it should be possible to opt out of starting the thread
-    /// or use a pool instead. This function will start a new thread
-    /// and run the start function of the adapter there. It will also
-    /// pass the entire object to the thread. TODO: Determine shutdown
-    /// method and what to do with handle.
-    pub fn start(mut self) -> Result<u8, Error> {
-        todo!()
-        // thread::spawn(move || {
-        //     if let Ok(()) = self.handler.start() {
-        //         let _ = self.handler.mode(Mode::Unblocking);
-        //         loop {
-        //             let wire = self.handler.accept().unwrap();
-        //             self.recent.add(wire.convert());
-        //             // TODO: Kademlia processing
-        //         }
-        //     } else {
-        //         return Err(Error::System);
-        //     }
-        // });
-        // Ok(1)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::router::address::Address;
-    use crate::transaction::{Class, Message};
+    use crate::message::Message;
+    use crate::node::Address;
+    use crate::transaction::Class;
 
     #[test]
     fn test_cache_add() {
@@ -200,8 +165,8 @@ mod tests {
     fn transaction() -> Transaction {
         let message = Message::new(
             Class::Ping,
-            Address::new("abc"),
-            Address::new("def"),
+            Address::generate("abc").unwrap(),
+            Address::generate("def").unwrap(),
             "test".to_string().as_bytes().to_vec(),
         );
         let t = Transaction::new(message);
