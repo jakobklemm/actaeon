@@ -1,17 +1,25 @@
 //! # Bucket
 //!
-//! Leafs of the binary routing tree.
+//! Leafs of the binary routing tree responsible for storing the
+//! actual nodes in the binary tree. (Nodes are in the leafes, not the
+//! "nodes" of the binary tree.) The nodes are stored sorted by time,
+//! not their keys. Within each bucket nodes share a common property,
+//! they are assumed to be "equally distanced". This might not be
+//! perfect for very large buckets (higher up in the tree) but will
+//! make no difference for buckets deeper in the tree.
 
 use crate::error::Error;
-use crate::node::{Center, Node};
+use crate::node::{Address, Center, Node};
 
 /// Stores a maximum of "limit" nodes, sorted by age / time. The first
 /// element in the array is the oldest one. This equals a Kademlia
-/// k-Bucket. Since it is only used inside the binary routing tree it
-/// simply called Leaf.
+/// k-Bucket. The bucket will be used in the binary routing tree as
+/// a leaf..
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Bucket {
+    /// Stores the nodes, gets sorted by time, from old to new.
     nodes: Vec<Node>,
+    /// Maximum length of the nodes array.
     limit: usize,
 }
 
@@ -82,6 +90,15 @@ impl Bucket {
         }
     }
 
+    /// Takes ownership of the Bucket and returns two new once, with
+    /// the nodes distributed between the two based on their distance
+    /// in comparison to the upper limit. The center has to be
+    /// provided to calculate the distance, the "ul" parameter is the
+    /// upper limit of the bucket. When spliting the root bucket the
+    /// upper limit would be 255 and the two new buckets would have
+    /// upper limits of 127 and 255. This function will do no
+    /// validation of size and will return even if one of the buckets
+    /// is empty.
     pub fn split(self, center: &Center, ul: u8) -> (Self, Self) {
         let mut near = Bucket::new(self.limit);
         let mut far = Bucket::new(self.limit);
@@ -98,10 +115,30 @@ impl Bucket {
         (near, far)
     }
 
-    /// TOOD: Add dedup by key.
+    /// With a provided address it will return a pointer to the node
+    /// matching that address. This is for exact matches, not for
+    /// getting targets. It will only every return one optional node.
+    pub fn find(&self, search: &Address) -> Option<&Node> {
+        let index = self.nodes.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => self.nodes.get(i),
+            None => None,
+        }
+    }
+
+    /// Simple wrapper around the limit field so that all fields can
+    /// remain private. It gets used by the router capacity query to
+    /// calculate the maximum size of the entire tree.
+    pub fn capacity(&self) -> usize {
+        self.limit
+    }
+
+    /// Since it is possible to add nodes to the tree or a bucket
+    /// multiple times some cleanup might be required. This function
+    /// removes all nodes with duplicate addresses.
     pub fn dedup(&mut self) {
         self.sort();
-        self.nodes.dedup();
+        self.nodes.dedup_by(|a, b| a.address == b.address);
     }
 
     /// Wrapper around the length of the nodes array.
