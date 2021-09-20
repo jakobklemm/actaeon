@@ -6,17 +6,21 @@
 //! supposed to be more modularized. Instead it handles the thread and
 //! the cache, each protocol then has its own module.
 
+use crate::error::Error;
+use crate::node::Center;
+use crate::tcp::Handler;
 use crate::transaction::Transaction;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
 /// Each message being sent between the Listener Thead and User Thread
 /// is either a UserAction or a SwitchAction, only UserAction get
 /// actually passed onto the user, others are internal types for
 /// managing the thread and the channel.
-pub enum Command {
+pub enum SwitchCommand {
     /// mpsc element for internal communication, like shutting down
     /// the thread or any issues.
-    SwitchAction(Action),
+    SwitchAction(SwitchAction),
     /// Messages coming from the network intended for the user.
     UserAction(Transaction),
 }
@@ -26,7 +30,7 @@ pub enum Command {
 /// the future this part of the system should be made more open by
 /// using traits and giving the user the option to specify how to
 /// handle all kinds of issues and messages.
-pub enum Action {
+pub enum SwitchAction {
     /// If the network connection has been terminated or failed. This
     /// only referres to the network connection, not the channel.
     Terminated,
@@ -47,7 +51,7 @@ pub struct Interface {
     /// The SwitchInterface will implement recv/0 and try_recv/0
     /// functions, which will internally receive messages from the
     /// channel.
-    receiver: Receiver<Command>,
+    receiver: Receiver<SwitchCommand>,
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -57,11 +61,13 @@ pub struct Switch {
     /// mpsc sender component to send incoming messages to the user.
     /// This will only be done for messages that are intended for the
     /// user, not forwarded messages in the kademlia system.
-    sender: Sender<Command>,
+    sender: Sender<SwitchCommand>,
     /// New transactions that are intended for the user will be
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
     cache: Cache,
+    /// TODO
+    handler: Handler,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -88,12 +94,29 @@ struct Cache {
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
-    fn new(limit: usize) -> (Switch, Interface) {
+    fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
         let (sender, receiver) = mpsc::channel();
         let cache = Cache::new(limit);
-        let switch = Switch { sender, cache };
+        let handler = Handler::new(center)?;
+        let switch = Switch {
+            sender,
+            cache,
+            handler,
+        };
         let interface = Interface { receiver };
-        (switch, interface)
+        Ok((switch, interface))
+    }
+
+    fn start(mut self) -> Result<(), Error> {
+        thread::spawn(move || loop {
+            match self.handler.read() {
+                Some(wire) => {
+                    println!("{:?}", wire.as_bytes());
+                }
+                None => continue,
+            }
+        });
+        Ok(())
     }
 }
 

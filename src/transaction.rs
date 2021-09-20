@@ -181,7 +181,7 @@ impl Wire {
     /// decisions can already be made without it. It currently takes a
     /// Vector of bytes, in the future just referencing the array
     /// would be better.
-    fn from_bytes(raw: &[u8]) -> Result<Self, Error> {
+    pub fn from_bytes(raw: &[u8]) -> Result<Self, Error> {
         if raw.len() <= 81 {
             return Err(Error::Invalid(String::from("invalid number of bytes")));
         }
@@ -237,7 +237,7 @@ impl Wire {
     /// performant to remove that, but it would requrie a mutable
     /// reference to the Wire object.
     /// TODO: Define mut / clone.
-    fn as_bytes(&self) -> Vec<u8> {
+    pub fn as_bytes(&self) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
         data.append(&mut self.class.to_vec());
         data.append(&mut self.source.to_vec());

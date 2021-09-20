@@ -5,4 +5,5 @@ pub mod message;
 pub mod node;
 pub mod router;
 pub mod switch;
+pub mod tcp;
 pub mod transaction;

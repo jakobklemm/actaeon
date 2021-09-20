@@ -243,6 +243,11 @@ impl Link {
         }
     }
 
+    pub fn to_string(&self) -> String {
+        let elements = [self.ip.clone(), self.port.to_string()];
+        elements.join(":")
+    }
+
     /// This single function can be used to both incease the count of
     /// the attempts and set it as true should it has been reached.
     /// The counter will currently not be reset if the status is true,
@@ -277,6 +282,12 @@ mod tests {
     fn test_link_new() {
         let l = Link::new("127.0.0.1".to_string(), 42);
         assert_eq!(l.port, 42);
+    }
+
+    #[test]
+    fn test_link_string() {
+        let l = Link::new("127.0.0.1".to_string(), 42);
+        assert_eq!(l.to_string(), String::from("127.0.0.1:42"));
     }
 
     #[test]
