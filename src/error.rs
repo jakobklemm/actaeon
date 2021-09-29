@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::net::AddrParseError;
+use std::sync::mpsc::SendError;
 
 /// Collection of error types of the entire system. There is currently
 /// no kind of smart conversion and this error do not interact with
@@ -50,6 +51,12 @@ impl From<AddrParseError> for Error {
 impl From<()> for Error {
     fn from(_err: ()) -> Self {
         Self::Invalid(String::from("data is invalid"))
+    }
+}
+
+impl<T> From<SendError<T>> for Error {
+    fn from(_err: SendError<T>) -> Self {
+        Self::Connection(String::from("message could not be sent"))
     }
 }
 

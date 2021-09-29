@@ -46,6 +46,7 @@ pub struct Transaction {
 /// .. bytes: Body,
 ///
 /// Minimum data size: 108 bytes (+ body).
+#[derive(Debug)]
 pub struct Wire {
     uuid: [u8; 16],
     class: [u8; 4],

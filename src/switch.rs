@@ -43,15 +43,13 @@ pub enum SwitchAction {
 /// Starting the switch will create both Interface and Switch objects.
 /// The Interface will be passed up and to the user / instance. From
 /// there the user can interact (receive messages) with the listener.
-/// Currently the communication only works in one direction, sending
-/// messages will currently not utilize the dedicated thread. In the
-/// future this will get integrated into the thread and also include a
-/// two-directional channel system.
 pub struct Interface {
     /// The SwitchInterface will implement recv/0 and try_recv/0
     /// functions, which will internally receive messages from the
     /// channel.
     receiver: Receiver<SwitchCommand>,
+    /// Other direction of communication
+    sender: Sender<SwitchCommand>,
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -62,6 +60,8 @@ pub struct Switch {
     /// This will only be done for messages that are intended for the
     /// user, not forwarded messages in the kademlia system.
     sender: Sender<SwitchCommand>,
+    /// Messages from the user
+    receiver: Receiver<SwitchCommand>,
     /// New transactions that are intended for the user will be
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
@@ -91,29 +91,82 @@ struct Cache {
     limit: usize,
 }
 
+impl Interface {
+    pub fn try_recv(&self) -> Option<Transaction> {
+        match self.receiver.try_recv() {
+            Ok(action) => match action {
+                SwitchCommand::SwitchAction(_s) => {
+                    // TODO: Handle SwitchActions, allow for custom user behaviour
+                    None
+                }
+                SwitchCommand::UserAction(t) => Some(t),
+            },
+            Err(_) => None,
+        }
+    }
+
+    pub fn recv(&self) -> Option<Transaction> {
+        match self.receiver.recv() {
+            Ok(action) => match action {
+                SwitchCommand::SwitchAction(_s) => {
+                    // TODO: Handle SwitchActions, allow for custom user behaviour
+                    None
+                }
+                SwitchCommand::UserAction(t) => Some(t),
+            },
+            Err(_) => None,
+        }
+    }
+
+    pub fn send(&self) {}
+}
+
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
     fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
-        let (sender, receiver) = mpsc::channel();
+        let (sender1, receiver1) = mpsc::channel();
+        let (sender2, receiver2) = mpsc::channel();
         let cache = Cache::new(limit);
         let handler = Handler::new(center)?;
         let switch = Switch {
-            sender,
+            sender: sender1,
+            receiver: receiver2,
             cache,
             handler,
         };
-        let interface = Interface { receiver };
+        let interface = Interface {
+            sender: sender2,
+            receiver: receiver1,
+        };
         Ok((switch, interface))
     }
 
+    /// TODO: Add tracing for invalid messages and sending errors that
+    /// can't be returned.
     fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
             match self.handler.read() {
-                Some(wire) => {
-                    println!("{:?}", wire.as_bytes());
-                }
+                Some(wire) => match wire.convert() {
+                    Ok(t) => {
+                        let message = SwitchCommand::UserAction(t);
+                        let _ = self.sender.send(message);
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                },
                 None => continue,
+            }
+            // Send message
+            match self.receiver.try_recv() {
+                Ok(_b) => {
+
+                    continue;
+                }
+                Err(e) => {
+                    println!("{:?}", e);
+                }
             }
         });
         Ok(())

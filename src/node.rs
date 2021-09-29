@@ -27,7 +27,7 @@ use std::time::SystemTime;
 pub struct Node {
     timestamp: SystemTime,
     pub address: Address,
-    link: Option<Link>,
+    pub link: Option<Link>,
 }
 
 /// Config for self / this node, currently as part of the Node module,
