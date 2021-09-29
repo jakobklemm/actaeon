@@ -126,6 +126,19 @@ impl Bucket {
         }
     }
 
+    /// Returns upto "limit" number of nodes. It only return
+    /// references to the nodes, since the nodes in the routing table
+    /// are expected to live the longest.
+    pub fn get(&self, limit: usize) -> Vec<&Node> {
+        let mut targets = Vec::new();
+        for i in &self.nodes {
+            targets.push(i);
+        }
+        targets.sort();
+        targets.truncate(limit);
+        return targets;
+    }
+
     /// Simple wrapper around the limit field so that all fields can
     /// remain private. It gets used by the router capacity query to
     /// calculate the maximum size of the entire tree.

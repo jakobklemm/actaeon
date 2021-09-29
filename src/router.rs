@@ -130,6 +130,18 @@ impl Table {
         self.root.find(address, &self.center)
     }
 
+    /// Returns the closest nodes to the search address, no matter the
+    /// shape of the binary tree. If there are less than the requested
+    /// number of nodes in the tree only that amount will be returned,
+    /// the function can't fail. The Nodes are not guaranteed to be
+    /// ordered by size since each bucket internally is ordered by
+    /// age. Overall the nodes should roughly be ordered, but that is
+    /// not reliable. This function will be used for sending the
+    /// actual messages to the k-closest Nodes.
+    pub fn get(&self, address: Address, limit: usize) -> Vec<&Node> {
+        self.root.get(address, &self.center, limit)
+    }
+
     /// Returns the current maximum capacity of the tree. The capacity
     /// is the sum of all maximum sizes of all Leaves / Buckets. The
     /// absolute limit is 255 times the size of each bucket, since
@@ -230,6 +242,15 @@ impl Element {
         }
     }
 
+    /// Gets upto the "limit" number of nodes closest to the target
+    /// address. => bottom up recursion
+    fn get(&self, target: Address, center: &Center, limit: usize) -> Vec<&Node> {
+        match self {
+            Self::Split(s, _) => s.get(target, center, limit),
+            Self::Leaf(b, _) => b.get(limit),
+        }
+    }
+
     /// Calculates the count of all Nodes under this Element.
     fn len(&self) -> usize {
         match self {
@@ -286,6 +307,35 @@ impl Split {
             self.near.find(search, center)
         } else {
             self.far.find(search, center)
+        }
+    }
+
+    /// Recursive function that finds the "limit" number of closest
+    /// nodes to a given Address. It tries get all of them from the
+    /// element the target is in but will use both sides if no target
+    /// is available.
+    fn get(&self, target: Address, center: &Center, limit: usize) -> Vec<&Node> {
+        let mut nodes = Vec::new();
+        if self.near.in_range(&target, &center) {
+            nodes.append(&mut self.near.get(target.clone(), center, limit));
+            if nodes.len() >= limit {
+                nodes.truncate(limit);
+                return nodes;
+            } else {
+                nodes.append(&mut self.far.get(target, center, limit));
+                nodes.truncate(limit);
+                return nodes;
+            }
+        } else {
+            nodes.append(&mut self.far.get(target.clone(), center, limit));
+            if nodes.len() >= limit {
+                nodes.truncate(limit);
+                return nodes;
+            } else {
+                nodes.append(&mut self.near.get(target, center, limit));
+                nodes.truncate(limit);
+                return nodes;
+            }
         }
     }
 
@@ -576,6 +626,114 @@ mod tests {
         assert_eq!(elem.len(), 1);
         let node = elem.find(&searching, &center).unwrap();
         assert_eq!(node.address, searching);
+    }
+
+    #[test]
+    fn test_element_get_top() {
+        let bucket = Bucket::new(20);
+        let prop = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Leaf(bucket, prop);
+        let center = gen_center_near();
+
+        let node = gen_node("searching");
+        elem.add(node, &center);
+        let node = gen_node("random");
+        elem.add(node, &center);
+        let node = gen_node("string");
+        elem.add(node, &center);
+        let node = gen_node("actaeon");
+        elem.add(node, &center);
+        let node = gen_node("data");
+        elem.add(node, &center);
+
+        let target = gen_node("target").address;
+        let targets = elem.get(target, &center, 5);
+        assert_eq!(targets.len(), 5);
+    }
+
+    #[test]
+    fn test_element_get_empty() {
+        let bucket = Bucket::new(20);
+        let prop = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let elem = Element::Leaf(bucket, prop);
+        let center = gen_center_near();
+        let target = gen_node("target").address;
+        let targets = elem.get(target, &center, 5);
+        assert_eq!(targets.len(), 0);
+    }
+
+    #[test]
+    fn test_element_get_deep() {
+        let split = Split {
+            near: Box::new(Element::Split(
+                Split {
+                    near: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 0,
+                            upper: 63,
+                        },
+                    )),
+                    far: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 64,
+                            upper: 127,
+                        },
+                    )),
+                },
+                Property {
+                    lower: 0,
+                    upper: 127,
+                },
+            )),
+            far: Box::new(Element::Leaf(
+                Bucket::new(20),
+                Property {
+                    lower: 128,
+                    upper: 255,
+                },
+            )),
+        };
+
+        let props = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Split(split, props);
+        let center = gen_center_near();
+
+        let node = gen_node("searching");
+        elem.add(node, &center);
+        let node = gen_node("random");
+        elem.add(node, &center);
+        let node = gen_node("string");
+        elem.add(node, &center);
+        let node = gen_node("actaeon");
+        elem.add(node, &center);
+        let node = gen_node("data");
+        elem.add(node, &center);
+
+        let node = gen_node("searching2");
+        elem.add(node, &center);
+        let node = gen_node("random2");
+        elem.add(node, &center);
+        let node = gen_node("string2");
+        elem.add(node, &center);
+        let node = gen_node("actaeon2");
+        elem.add(node, &center);
+        let node = gen_node("maybe use a loop for this?");
+        elem.add(node, &center);
+
+        let target = gen_node("target").address;
+        let targets = elem.get(target, &center, 5);
+        assert_eq!(targets.len(), 5);
     }
 
     #[test]
