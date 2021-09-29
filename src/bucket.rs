@@ -139,6 +139,17 @@ impl Bucket {
         return targets;
     }
 
+    pub fn remove(&mut self, target: &Address) -> Result<(), Error> {
+        let index = self.nodes.iter().position(|e| &e.address == target);
+        match index {
+            Some(i) => {
+                self.nodes.remove(i);
+                Ok(())
+            }
+            None => Err(Error::Unknown),
+        }
+    }
+
     /// Simple wrapper around the limit field so that all fields can
     /// remain private. It gets used by the router capacity query to
     /// calculate the maximum size of the entire tree.
@@ -225,6 +236,34 @@ mod tests {
         let (near, far) = root.split(&center, 255);
         assert_eq!(near.len(), 2);
         assert_eq!(far.len(), 1);
+    }
+
+    #[test]
+    fn test_bucket_get() {
+        let mut root = Bucket::new(20);
+        root.add(gen_node("first"));
+        root.add(gen_node("second"));
+        root.add(gen_node("another"));
+        let targets = root.get(2);
+        assert_eq!(targets.len(), 2);
+    }
+
+    #[test]
+    fn test_bucket_remove() {
+        let mut root = Bucket::new(20);
+        root.add(gen_node("first"));
+        root.add(gen_node("second"));
+        let target = gen_node("first").address;
+        root.remove(&target).unwrap();
+        assert_eq!(root.len(), 1);
+    }
+
+    #[test]
+    fn test_bucket_remove_empty() {
+        let mut root = Bucket::new(20);
+        let target = gen_node("first").address;
+
+        assert_eq!(root.remove(&target).is_err(), true);
     }
 
     fn gen_bucket(l: usize) -> Bucket {

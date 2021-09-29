@@ -138,7 +138,7 @@ impl Table {
     /// age. Overall the nodes should roughly be ordered, but that is
     /// not reliable. This function will be used for sending the
     /// actual messages to the k-closest Nodes.
-    pub fn get(&self, address: Address, limit: usize) -> Vec<&Node> {
+    pub fn get(&self, address: &Address, limit: usize) -> Vec<&Node> {
         self.root.get(address, &self.center, limit)
     }
 
@@ -207,6 +207,43 @@ impl Element {
         }
     }
 
+    fn remove(&mut self, address: &Address, center: &Center) -> Result<(), Error> {
+        if let None = self.find(address, center) {
+            return Err(Error::Unknown);
+        }
+        match self {
+            Self::Split(s, _) => s.remove(address, center)?,
+            Self::Leaf(b, _) => {
+                b.remove(address)?;
+                // strange ownership rules here...
+                let near = b.len();
+                let cap = b.capacity();
+                // once the node has been removed the shape of the
+                // tree might have to updated.
+                if (*self).find_other(address, center).len() + near < cap {
+                    // TODO: collaps
+                    todo!()
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn find_other(&self, address: &Address, center: &Center) -> &Bucket {
+        match self {
+            Self::Split(s, _) => {
+                if s.near.in_range(address, center) {
+                    s.far.find_other(address, center)
+                } else {
+                    s.near.find_other(address, center)
+                }
+            }
+            Self::Leaf(b, _) => {
+                return b;
+            }
+        }
+    }
+
     /// Takes ownership of an Element (Leaf) and splits into two new
     /// ones, which gets returned as a new Split Element. The center
     /// is required to calculate the distance. The new Elements will
@@ -244,7 +281,7 @@ impl Element {
 
     /// Gets upto the "limit" number of nodes closest to the target
     /// address. => bottom up recursion
-    fn get(&self, target: Address, center: &Center, limit: usize) -> Vec<&Node> {
+    fn get(&self, target: &Address, center: &Center, limit: usize) -> Vec<&Node> {
         match self {
             Self::Split(s, _) => s.get(target, center, limit),
             Self::Leaf(b, _) => b.get(limit),
@@ -314,10 +351,10 @@ impl Split {
     /// nodes to a given Address. It tries get all of them from the
     /// element the target is in but will use both sides if no target
     /// is available.
-    fn get(&self, target: Address, center: &Center, limit: usize) -> Vec<&Node> {
+    fn get(&self, target: &Address, center: &Center, limit: usize) -> Vec<&Node> {
         let mut nodes = Vec::new();
         if self.near.in_range(&target, &center) {
-            nodes.append(&mut self.near.get(target.clone(), center, limit));
+            nodes.append(&mut self.near.get(target, center, limit));
             if nodes.len() >= limit {
                 nodes.truncate(limit);
                 return nodes;
@@ -327,7 +364,7 @@ impl Split {
                 return nodes;
             }
         } else {
-            nodes.append(&mut self.far.get(target.clone(), center, limit));
+            nodes.append(&mut self.far.get(target, center, limit));
             if nodes.len() >= limit {
                 nodes.truncate(limit);
                 return nodes;
@@ -337,6 +374,38 @@ impl Split {
                 return nodes;
             }
         }
+    }
+
+    fn remove(&mut self, address: &Address, center: &Center) -> Result<(), Error> {
+        if self.near.in_range(address, center) {
+            self.near.remove(address, center)
+        } else {
+            self.far.remove(address, center)
+        }
+    }
+
+    fn collapse(&self) -> Result<Element, Error> {
+        let mut near = Vec::new();
+        let mut far = Vec::new();
+        let lower;
+        let upper;
+        let limit;
+        if let Element::Leaf(b, p) = &*self.near {
+            near.append(&mut b.get(b.capacity()));
+            lower = p.lower;
+            limit = b.capacity();
+        } else {
+            return Err(Error::Unknown);
+        }
+        if let Element::Leaf(b, p) = &*self.far {
+            far.append(&mut b.get(b.capacity()));
+            upper = p.upper;
+        } else {
+            return Err(Error::Unknown);
+        }
+        let bucket = Bucket::new(limit);
+        let prop = Property { lower, upper };
+        Ok(Element::Leaf(bucket, prop))
     }
 
     /// Sums up the length of all Elements below the Split recursivly.
@@ -650,7 +719,7 @@ mod tests {
         elem.add(node, &center);
 
         let target = gen_node("target").address;
-        let targets = elem.get(target, &center, 5);
+        let targets = elem.get(&target, &center, 5);
         assert_eq!(targets.len(), 5);
     }
 
@@ -664,7 +733,7 @@ mod tests {
         let elem = Element::Leaf(bucket, prop);
         let center = gen_center_near();
         let target = gen_node("target").address;
-        let targets = elem.get(target, &center, 5);
+        let targets = elem.get(&target, &center, 5);
         assert_eq!(targets.len(), 0);
     }
 
@@ -732,7 +801,7 @@ mod tests {
         elem.add(node, &center);
 
         let target = gen_node("target").address;
-        let targets = elem.get(target, &center, 5);
+        let targets = elem.get(&target, &center, 5);
         assert_eq!(targets.len(), 5);
     }
 
