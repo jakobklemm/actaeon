@@ -41,11 +41,11 @@ impl Handler {
         }
     }
 
-    pub fn send(&self, data: Wire, node: Node) -> Result<(), Error> {
+    pub fn send(&self, data: Wire, node: &Node) -> Result<(), Error> {
         if node.link.is_none() {
             Err(Error::Invalid(String::from("no link data found")))
         } else {
-            let mut stream = TcpStream::connect(node.link.unwrap().to_string())?;
+            let mut stream = TcpStream::connect(node.link.as_ref().unwrap().to_string())?;
             stream.write(&data.as_bytes())?;
             Ok(())
         }

@@ -110,7 +110,7 @@ impl Transaction {
     /// the types without having to take ownership. In the future this
     /// might get changed or a second function will get added, which
     /// uses fewer allocations.
-    fn to_wire(&self) -> Wire {
+    pub fn to_wire(&self) -> Wire {
         Wire {
             uuid: *self.uuid.as_bytes(),
             class: self.message.class.as_bytes(),
@@ -126,6 +126,13 @@ impl Transaction {
     /// directly.
     pub fn as_bytes(&self) -> Vec<u8> {
         self.to_wire().as_bytes()
+    }
+
+    /// Returns the Address of target of a message. This is simply a
+    /// shorthand function for reading the correct field but it
+    /// ensures privacy.
+    pub fn target(&self) -> Address {
+        self.message.target.clone()
     }
 
     /// This function returns the duration since the Transaction was

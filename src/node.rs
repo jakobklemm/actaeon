@@ -34,6 +34,7 @@ pub struct Node {
 /// might get restructured into a dedicated module in the future,
 /// should it increase in scope. It has to be created before all other
 /// nodes and stored in the interface.
+#[derive(Clone)]
 pub struct Center {
     /// The public key / address of this node / self, which gets
     /// automatically generated from the secret key.
@@ -230,6 +231,38 @@ impl BitXor for Address {
     }
 }
 
+/// Since sometimes the user has to interact with Addresses directly,
+/// it might be easier to use a trait object, so that a number of
+/// different types can be used to create Addresses.
+pub trait ToAddress {
+    /// Returns a new Address created from the input.
+    fn to_address(&self) -> Result<Address, Error>;
+}
+
+impl ToAddress for String {
+    fn to_address(&self) -> Result<Address, Error> {
+        let bytes = blake3::hash(self.as_bytes()).as_bytes().to_owned();
+        Address::from_bytes(bytes)
+    }
+}
+
+impl ToAddress for [u8; 32] {
+    fn to_address(&self) -> Result<Address, Error> {
+        Address::from_bytes(*self)
+    }
+}
+
+impl ToAddress for usize {
+    fn to_address(&self) -> Result<Address, Error> {
+        let mut bytes = [0; 32];
+        let conv = self.to_be_bytes();
+        for (i, j) in conv.iter().enumerate() {
+            bytes[i] = *j;
+        }
+        Address::from_bytes(bytes)
+    }
+}
+
 impl Link {
     /// Creates new connection details (Link).
     ///
@@ -301,6 +334,16 @@ mod tests {
     fn test_address_xor_zero() {
         let a = Address::generate("test").unwrap();
         assert_eq!(a.clone() ^ a, [0; 32]);
+    }
+
+    #[test]
+    fn test_to_address_bytes() {
+        let mut bytes = [0; 32];
+        bytes[17] = 42;
+        assert_eq!(
+            bytes.clone().to_address().unwrap(),
+            Address::from_bytes(bytes).unwrap()
+        );
     }
 
     #[test]

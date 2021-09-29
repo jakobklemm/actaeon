@@ -7,7 +7,9 @@
 //! the cache, each protocol then has its own module.
 
 use crate::error::Error;
+use crate::message::Message;
 use crate::node::Center;
+use crate::router::Table;
 use crate::tcp::Handler;
 use crate::transaction::Transaction;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -32,12 +34,14 @@ pub enum SwitchCommand {
 /// handle all kinds of issues and messages.
 pub enum SwitchAction {
     /// If the network connection has been terminated or failed. This
-    /// only referres to the network connection, not the channel.
-    Terminated,
+    /// only referres to the network connection, not the channel. It
+    /// can also be used to signal termination to the thread.
+    Terminate,
     /// A heads up message should the cache be full. The system should
     /// handle this automatically, but it can be helpful to be
-    /// informed.
-    CacheFull,
+    /// informed. If it gets sent by the user the cache in the thread
+    /// will be cleared.
+    Cache,
 }
 
 /// Starting the switch will create both Interface and Switch objects.
@@ -68,6 +72,8 @@ pub struct Switch {
     cache: Cache,
     /// TODO
     handler: Handler,
+    /// TODO
+    table: Table,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -118,22 +124,27 @@ impl Interface {
         }
     }
 
-    pub fn send(&self) {}
+    pub fn send(&self, m: Message) -> Result<(), Error> {
+        let transaction = Transaction::new(m);
+        self.sender.send(SwitchCommand::UserAction(transaction))?;
+        Ok(())
+    }
 }
 
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
-    fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
+    pub fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
         let (sender1, receiver1) = mpsc::channel();
         let (sender2, receiver2) = mpsc::channel();
         let cache = Cache::new(limit);
-        let handler = Handler::new(center)?;
+        let handler = Handler::new(center.clone())?;
         let switch = Switch {
             sender: sender1,
             receiver: receiver2,
             cache,
             handler,
+            table: Table::new(limit, center),
         };
         let interface = Interface {
             sender: sender2,
@@ -144,11 +155,13 @@ impl Switch {
 
     /// TODO: Add tracing for invalid messages and sending errors that
     /// can't be returned.
-    fn start(mut self) -> Result<(), Error> {
+    pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
+            // tcp messages
             match self.handler.read() {
                 Some(wire) => match wire.convert() {
                     Ok(t) => {
+                        self.cache.add(t.clone());
                         let message = SwitchCommand::UserAction(t);
                         let _ = self.sender.send(message);
                     }
@@ -158,14 +171,29 @@ impl Switch {
                 },
                 None => continue,
             }
-            // Send message
-            match self.receiver.try_recv() {
-                Ok(_b) => {
 
-                    continue;
+            // user messages
+            match self.receiver.try_recv() {
+                Ok(data) => {
+                    match data {
+                        SwitchCommand::UserAction(t) => {
+                            // TODO: Get node from RT
+                            let target = self.table.find(&t.target()).unwrap();
+                            // on tcp fail update the RT (and fail the sending?)
+                            let _ = self.handler.send(t.to_wire(), target);
+                        }
+                        SwitchCommand::SwitchAction(action) => match action {
+                            SwitchAction::Terminate => {
+                                break;
+                            }
+                            SwitchAction::Cache => {
+                                self.cache.empty();
+                            }
+                        },
+                    }
                 }
-                Err(e) => {
-                    println!("{:?}", e);
+                Err(_) => {
+                    continue;
                 }
             }
         });
@@ -177,7 +205,7 @@ impl Cache {
     /// Creates a new empty cache with a fixed size limit. In the
     /// future it might be helpful to dynamically change the cache
     /// limit, currently that is not implemented.
-    pub fn new(limit: usize) -> Self {
+    fn new(limit: usize) -> Self {
         Self {
             elements: Vec::new(),
             limit,
@@ -187,17 +215,21 @@ impl Cache {
     /// Takes a mutable reference to the cache and sorts the elements.
     /// Transaction implements Ord based on the "created" timestamp,
     /// which is used to sort the cache.
-    pub fn sort(&mut self) {
+    fn sort(&mut self) {
         self.elements.sort()
     }
 
     /// Adds a new element to the cache. If the cache is full the
     /// oldest element will get removed and the new element gets
     /// added.
-    pub fn add(&mut self, element: Transaction) {
+    fn add(&mut self, element: Transaction) {
         self.elements.push(element);
         self.sort();
         self.elements.truncate(self.limit);
+    }
+
+    fn empty(&mut self) {
+        self.elements = Vec::new();
     }
 }
 
