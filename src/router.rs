@@ -216,6 +216,11 @@ impl Element {
         }
     }
 
+    /// Removes a node from the Element. Currently the function can
+    /// panic, should the split fail. Split gets called once always,
+    /// but the shape of the tree will only change if required. If a
+    /// split is required a new Element is generated and this current
+    /// object is replaced with the new one.
     fn remove(&mut self, address: &Address, center: &Center) -> Result<(), Error> {
         if let None = self.find(address, center) {
             return Err(Error::Unknown);
@@ -224,9 +229,15 @@ impl Element {
             Self::Split(s, _) => {
                 if s.is_final() {
                     let _ = s.remove(address, center);
-                    if s.capacity() / 2 < s.len() {
-                        let e = s.collapse().unwrap();
-                        *self = e;
+                    // collaps gets only called if half the capacity
+                    // if less than the length.
+                    if (s.capacity() / 2) > s.len() {
+                        if let Ok(e) = s.collapse() {
+                            // the actual Element (self) gets replaced.
+                            *self = e;
+                        } else {
+                            return Err(Error::Unknown);
+                        }
                     }
                 } else {
                     s.remove(address, center)?;
@@ -381,6 +392,7 @@ impl Split {
         }
     }
 
+    /// Designated the remove call to the correct Element (near / far).
     fn remove(&mut self, address: &Address, center: &Center) -> Result<(), Error> {
         if self.near.in_range(address, center) {
             self.near.remove(address, center)
@@ -389,28 +401,35 @@ impl Split {
         }
     }
 
+    /// Core method for updating the shape of the tree after removing
+    /// Elements. It will allocate two new arrays, get all the
+    /// Elements from the two Leaf Buckets and then create a new
+    /// Bucket & Element with the combined array. It will check if the
+    /// total length is exceeded and only fail not both of the
+    /// Elements are Leafs.
     fn collapse(&self) -> Result<Element, Error> {
-        let mut near = Vec::new();
-        let mut far = Vec::new();
+        let mut nodes = Vec::new();
         let lower;
         let upper;
         let limit;
         if let Element::Leaf(b, p) = &*self.near {
-            near.append(&mut b.get(b.capacity()));
+            nodes.append(&mut b.get(b.capacity()));
             lower = p.lower;
             limit = b.capacity();
         } else {
             return Err(Error::Unknown);
         }
         if let Element::Leaf(b, p) = &*self.far {
-            far.append(&mut b.get(b.capacity()));
+            nodes.append(&mut b.get(b.capacity()));
             upper = p.upper;
         } else {
             return Err(Error::Unknown);
         }
+        if nodes.len() > limit {
+            return Err(Error::Unknown);
+        }
         let mut bucket = Bucket::new(limit);
-        near.append(&mut far);
-        for i in near.into_iter() {
+        for i in nodes.into_iter() {
             bucket.add(i.clone());
         }
         let prop = Property { lower, upper };
@@ -513,10 +532,21 @@ mod tests {
             elem.add(gen_node(&i.to_string()), &center);
         }
 
+        for i in 100..1100 {
+            let _ = elem.remove(&gen_node(&i.to_string()).address, &center);
+        }
+
+        for i in 0..1000 {
+            elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        for i in 100..1100 {
+            let _ = elem.remove(&gen_node(&i.to_string()).address, &center);
+        }
+
         let a = elem.len() <= elem.capacity();
 
         assert_eq!(a, true);
-        assert_eq!(elem.len(), 100);
     }
 
     #[test]
