@@ -58,7 +58,7 @@ pub struct Center {
 /// implemented. Currently the address only has once field so a
 /// shorthand notation would be possible. But since more fields might
 /// get added in the future the classic syntax is used.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Address {
     /// sodiumoxide poly1305 public key which is used to find and
     /// identify nodes.

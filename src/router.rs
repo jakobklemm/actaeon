@@ -122,6 +122,10 @@ impl Table {
         self.root.add(node, &self.center);
     }
 
+    pub fn remove(&mut self, address: &Address) -> Result<(), Error> {
+        self.root.remove(address, &self.center)
+    }
+
     /// Takes an Address and returns an optional Node if a Node with
     /// exactly that Address exists. This is not meant as a way of
     /// finding new targets for messages but for checking if a Node
@@ -212,36 +216,22 @@ impl Element {
             return Err(Error::Unknown);
         }
         match self {
-            Self::Split(s, _) => s.remove(address, center)?,
+            Self::Split(s, _) => {
+                if s.is_final() {
+                    let _ = s.remove(address, center);
+                    if s.capacity() / 2 < s.len() {
+                        let e = s.collapse().unwrap();
+                        *self = e;
+                    }
+                } else {
+                    s.remove(address, center)?;
+                }
+            }
             Self::Leaf(b, _) => {
                 b.remove(address)?;
-                // strange ownership rules here...
-                let near = b.len();
-                let cap = b.capacity();
-                // once the node has been removed the shape of the
-                // tree might have to updated.
-                if (*self).find_other(address, center).len() + near < cap {
-                    // TODO: collaps
-                    todo!()
-                }
             }
         }
         Ok(())
-    }
-
-    fn find_other(&self, address: &Address, center: &Center) -> &Bucket {
-        match self {
-            Self::Split(s, _) => {
-                if s.near.in_range(address, center) {
-                    s.far.find_other(address, center)
-                } else {
-                    s.near.find_other(address, center)
-                }
-            }
-            Self::Leaf(b, _) => {
-                return b;
-            }
-        }
     }
 
     /// Takes ownership of an Element (Leaf) and splits into two new
@@ -312,6 +302,16 @@ impl Element {
         match self {
             Self::Split(_, p) => p.in_range(&address, center),
             Self::Leaf(_, p) => p.in_range(&address, center),
+        }
+    }
+
+    /// Returns true if the Element is a Leaf. This will be used by
+    /// the collaps / remove functions to verify they are operating on
+    /// the bottom most elements.
+    fn is_leaf(&self) -> bool {
+        match self {
+            Self::Split(_, _) => false,
+            Self::Leaf(_, _) => true,
         }
     }
 }
@@ -403,7 +403,11 @@ impl Split {
         } else {
             return Err(Error::Unknown);
         }
-        let bucket = Bucket::new(limit);
+        let mut bucket = Bucket::new(limit);
+        near.append(&mut far);
+        for i in near.into_iter() {
+            bucket.add(i.clone());
+        }
         let prop = Property { lower, upper };
         Ok(Element::Leaf(bucket, prop))
     }
@@ -424,6 +428,10 @@ impl Split {
         let mut sum = self.near.capacity();
         sum += self.far.capacity();
         return sum;
+    }
+
+    fn is_final(&self) -> bool {
+        self.near.is_leaf() && self.far.is_leaf()
     }
 }
 
@@ -462,6 +470,29 @@ impl Property {
 mod tests {
     use super::*;
     use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
+
+    #[test]
+    fn test_full_duplicate() {
+        let b = gen_bucket();
+        let p = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Leaf(b, p);
+        let center = gen_center();
+
+        for i in 0..40 {
+            elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        assert_eq!(elem.len(), 40);
+
+        for i in 0..40 {
+            let _ = elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        assert_eq!(elem.len(), 40);
+    }
 
     #[test]
     fn test_property_in_range() {
@@ -806,6 +837,155 @@ mod tests {
     }
 
     #[test]
+    fn test_element_remove_root() {
+        let bucket = Bucket::new(20);
+        let prop = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Leaf(bucket, prop);
+
+        let center = gen_center();
+
+        let node = gen_node("test");
+        elem.add(node, &center);
+
+        assert_eq!(elem.len(), 1);
+
+        let node = gen_node("test");
+        let _ = elem.remove(&node.address, &center);
+        assert_eq!(elem.len(), 0);
+    }
+
+    #[test]
+    fn test_element_remove_deep() {
+        let split = Split {
+            near: Box::new(Element::Split(
+                Split {
+                    near: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 0,
+                            upper: 63,
+                        },
+                    )),
+                    far: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 64,
+                            upper: 127,
+                        },
+                    )),
+                },
+                Property {
+                    lower: 0,
+                    upper: 127,
+                },
+            )),
+            far: Box::new(Element::Leaf(
+                Bucket::new(20),
+                Property {
+                    lower: 128,
+                    upper: 255,
+                },
+            )),
+        };
+
+        let props = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Split(split, props);
+        let center = gen_center_near();
+
+        let node = gen_node("searching");
+        elem.add(node, &center);
+        let node = gen_node("random");
+        elem.add(node, &center);
+        let node = gen_node("string");
+        elem.add(node, &center);
+        let node = gen_node("actaeon");
+        elem.add(node, &center);
+        let node = gen_node("data");
+        elem.add(node, &center);
+
+        let node = gen_node("searching2");
+        elem.add(node, &center);
+        let node = gen_node("random2");
+        elem.add(node, &center);
+        let node = gen_node("string2");
+        elem.add(node, &center);
+        let node = gen_node("actaeon2");
+        elem.add(node, &center);
+        let node = gen_node("maybe use a loop for this?");
+        elem.add(node, &center);
+
+        let target = gen_node("random");
+        assert_eq!(elem.len(), 10);
+        let _ = elem.remove(&target.address, &center);
+        assert_eq!(elem.len(), 9);
+    }
+
+    #[test]
+    fn test_element_remove_collaps() {
+        let split = Split {
+            near: Box::new(Element::Split(
+                Split {
+                    near: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 0,
+                            upper: 63,
+                        },
+                    )),
+                    far: Box::new(Element::Leaf(
+                        Bucket::new(20),
+                        Property {
+                            lower: 64,
+                            upper: 127,
+                        },
+                    )),
+                },
+                Property {
+                    lower: 0,
+                    upper: 127,
+                },
+            )),
+            far: Box::new(Element::Leaf(
+                Bucket::new(20),
+                Property {
+                    lower: 128,
+                    upper: 255,
+                },
+            )),
+        };
+
+        let props = Property {
+            lower: 0,
+            upper: 255,
+        };
+
+        let mut elem = Element::Split(split, props);
+        let center = gen_center_near();
+
+        for i in 0..40 {
+            elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        assert_eq!(elem.len(), 40);
+
+        for i in 0..40 {
+            let _ = elem.remove(&gen_node(&i.to_string()).address, &center);
+        }
+
+        assert_eq!(elem.len(), 0);
+
+        if let Element::Leaf(b, _) = elem {
+            assert_eq!(b.len(), 0);
+        }
+    }
+
+    #[test]
     fn test_split_add_near_top() {
         let mut split = gen_split();
         let node = gen_node_near();
@@ -883,6 +1063,23 @@ mod tests {
         let center = gen_center_near();
         let node = gen_node_near();
         assert_eq!(split.near.in_range(&node.address, &center), true);
+    }
+
+    #[test]
+    fn test_split_collaps_working() {
+        let mut split = gen_split();
+        let center = gen_center_near();
+        let node = gen_node("first");
+        split.add(node, &center);
+        let node = gen_node("second");
+        split.add(node, &center);
+        let node = gen_node_far();
+        split.add(node, &center);
+        let node = gen_node_near();
+        split.add(node, &center);
+        assert_eq!(split.len(), 4);
+        let e = split.collapse().unwrap();
+        assert_eq!(e.len(), 4);
     }
 
     #[test]

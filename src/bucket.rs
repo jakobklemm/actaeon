@@ -56,6 +56,7 @@ impl Bucket {
             return Err(Error::Full);
         } else {
             self.nodes.push(node);
+            self.dedup();
             return Ok(());
         }
     }
@@ -77,6 +78,7 @@ impl Bucket {
         if self.len() < self.limit {
             self.nodes.push(node);
             self.sort();
+            self.dedup();
         } else {
             if let Some(first) = self.nodes.first_mut() {
                 // instead of manually checking the status of the
@@ -86,6 +88,7 @@ impl Bucket {
                     *first = node;
                 }
                 self.sort();
+                self.dedup();
             }
         }
     }
@@ -161,13 +164,22 @@ impl Bucket {
     /// multiple times some cleanup might be required. This function
     /// removes all nodes with duplicate addresses.
     pub fn dedup(&mut self) {
-        self.sort();
+        self.sort_by_address();
         self.nodes.dedup_by(|a, b| a.address == b.address);
     }
 
     /// Wrapper around the length of the nodes array.
     pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Uses the Ord and Partial Ord implementation Address to sort
+    /// the nodes based on that. This does not represent the distance
+    /// sorting for Kademlia but is just a shortcut for easier
+    /// handling.
+    fn sort_by_address(&mut self) {
+        self.nodes
+            .sort_by(|a, b| a.address.partial_cmp(&b.address).unwrap());
     }
 }
 
