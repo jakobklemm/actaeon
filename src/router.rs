@@ -122,6 +122,11 @@ impl Table {
         self.root.add(node, &self.center);
     }
 
+    /// Opposite of "try_add", will remove a Node with the matching
+    /// Address from the table. Since that might make parts of the
+    /// tree under used, the shape can get updated after removal.
+    /// Should the Address not be in the Table this function will
+    /// fail.
     pub fn remove(&mut self, address: &Address) -> Result<(), Error> {
         self.root.remove(address, &self.center)
     }
@@ -492,6 +497,26 @@ mod tests {
         }
 
         assert_eq!(elem.len(), 40);
+    }
+
+    #[test]
+    fn test_full_stress() {
+        let b = gen_bucket();
+        let p = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Leaf(b, p);
+        let center = gen_center();
+
+        for i in 0..1000 {
+            elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        let a = elem.len() <= elem.capacity();
+
+        assert_eq!(a, true);
+        assert_eq!(elem.len(), 100);
     }
 
     #[test]
