@@ -70,9 +70,12 @@ pub struct Switch {
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
     cache: Cache,
-    /// TODO
+    /// Represents the TCP Handler, currently just one struct. Later
+    /// this will be replaced by a trait Object.
     handler: Handler,
-    /// TODO
+    /// The main copy of the couting table, which will be maintained
+    /// by this Thread. It will have to be wrapped in a Arc Mutex to
+    /// allow for the Updater Thread.
     table: Table,
 }
 
@@ -177,10 +180,11 @@ impl Switch {
                 Ok(data) => {
                     match data {
                         SwitchCommand::UserAction(t) => {
-                            // TODO: Get node from RT
-                            let target = self.table.find(&t.target()).unwrap();
+                            let targets = self.table.get(&t.target(), 5);
                             // on tcp fail update the RT (and fail the sending?)
-                            let _ = self.handler.send(t.to_wire(), target);
+                            for i in targets {
+                                let _ = self.handler.send(t.to_wire(), i);
+                            }
                         }
                         SwitchCommand::SwitchAction(action) => match action {
                             SwitchAction::Terminate => {

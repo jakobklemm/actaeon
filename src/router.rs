@@ -460,7 +460,10 @@ impl Split {
 }
 
 impl Property {
-    /// TODO: Reduce clone calls.
+    /// Determines whether an address is within range of the given
+    /// Property. It does this by calculating the XOR Distance between
+    /// the Node and the Center. If the first significant byte falls
+    /// within the range it will return true.
     fn in_range(&self, address: &Address, center: &Center) -> bool {
         let index = (address.clone() ^ center.public.clone())[0];
         self.lower <= index && self.upper > index

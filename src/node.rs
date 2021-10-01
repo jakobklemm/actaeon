@@ -22,7 +22,12 @@ use std::cmp::Ordering;
 use std::ops::BitXor;
 use std::time::SystemTime;
 
-/// TODO: Docs
+/// Represents a singe Node in the system. It simply stores the
+/// (optional) connection details, the routing Address and a
+/// timestamp. This does not represent the actual connection to any
+/// node, simply information on how to connect to it (both directly
+/// and indirectly). The data will get populated over time through a
+/// dedicated lookup thread.
 #[derive(Clone, Debug, Eq)]
 pub struct Node {
     timestamp: SystemTime,
@@ -42,8 +47,6 @@ pub struct Center {
     /// The base of the entire object / center calculation. It has to
     /// be stored for encyption but should never be read by anybody
     /// except for the crypto module.
-    ///
-    /// TODO: Make the secret key not publicly available.
     pub secret: SecretKey,
     /// The time this node was started, used to compare values in the
     /// DRT.
@@ -264,9 +267,8 @@ impl ToAddress for usize {
 }
 
 impl Link {
-    /// Creates new connection details (Link).
-    ///
-    /// TODO: Replace "reachable" with "status" enum.
+    /// Creates new connection details (Link). It sets both the
+    /// reachable and attempts values to teh default.
     pub fn new(ip: String, port: usize) -> Self {
         Self {
             ip,
@@ -276,6 +278,10 @@ impl Link {
         }
     }
 
+    /// Returns a new String of the connection details, usable by the
+    /// TCP handler. (This still doesn't validtate the values, it
+    /// simply concats them. There is no guarantee it will be usable
+    /// by IpV4.)
     pub fn to_string(&self) -> String {
         let elements = [self.ip.clone(), self.port.to_string()];
         elements.join(":")

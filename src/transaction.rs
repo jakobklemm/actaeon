@@ -244,7 +244,6 @@ impl Wire {
     /// Currently this function clones the body. It might be more
     /// performant to remove that, but it would requrie a mutable
     /// reference to the Wire object.
-    /// TODO: Define mut / clone.
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
         data.append(&mut self.class.to_vec());

@@ -32,7 +32,6 @@ struct Network {
     /// serde deserialization value for the config file.
     signaling: Vec<String>,
     /// serde deserialization value for the config file.
-    /// TODO: Move cache to section "local" with additional fields.
     cache: usize,
 }
 
@@ -202,8 +201,6 @@ impl CenterConfig {
 
     /// The secret key can't be formatted as UTF-8 and if stored as a
     /// file it needs to be encoded / decoded using special methods.
-    ///
-    /// TODO: Add save center / key method or dedicated script.
     pub fn load_key(path: &str) -> Result<[u8; 32], Error> {
         let file = File::open(path)?;
         let reader = std::io::BufReader::new(file);
