@@ -11,6 +11,7 @@ use crate::interface::Interface;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
+use crate::topic::{Topic, TopicTable};
 use crate::transaction::Transaction;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -25,7 +26,8 @@ pub enum SwitchCommand {
     /// mpsc element for internal communication, like shutting down
     /// the thread or any issues.
     SwitchAction(SwitchAction),
-    /// Messages coming from the network intended for the user.
+    /// Messages coming from the network intended for the user (or the
+    /// other way around).
     UserAction(Transaction),
 }
 
@@ -34,6 +36,7 @@ pub enum SwitchCommand {
 /// the future this part of the system should be made more open by
 /// using traits and giving the user the option to specify how to
 /// handle all kinds of issues and messages.
+#[derive(Debug)]
 pub enum SwitchAction {
     /// If the network connection has been terminated or failed. This
     /// only referres to the network connection, not the channel. It
@@ -44,6 +47,8 @@ pub enum SwitchAction {
     /// informed. If it gets sent by the user the cache in the thread
     /// will be cleared.
     Cache,
+    /// Add a new entry to the TopicTable
+    Subscribe(Topic),
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -52,10 +57,10 @@ pub enum SwitchAction {
 pub struct Switch {
     /// mpsc sender component to send incoming messages to the user.
     /// This will only be done for messages that are intended for the
-    /// user, not forwarded messages in the kademlia system.
-    sender: Sender<SwitchCommand>,
-    /// Messages from the user
-    receiver: Receiver<SwitchCommand>,
+    /// user, not forwarded messages in the Kademlia system. Since
+    /// both directions are needed, the two channels are abstracted
+    /// through a dedicated object, which handles both.
+    channel: Channel,
     /// New transactions that are intended for the user will be
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
@@ -67,6 +72,8 @@ pub struct Switch {
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
     table: Table,
+    /// Holds a list of all currently active topics.
+    topics: TopicTable,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -90,26 +97,65 @@ struct Cache {
     limit: usize,
 }
 
+#[derive(Debug)]
+pub struct Channel {
+    sender: Sender<SwitchCommand>,
+    receiver: Receiver<SwitchCommand>,
+}
+
+impl Channel {
+    pub fn new() -> (Self, Self) {
+        let (s1, r1) = mpsc::channel();
+        let (s2, r2) = mpsc::channel();
+        (
+            Self {
+                sender: s1,
+                receiver: r2,
+            },
+            Self {
+                sender: s2,
+                receiver: r1,
+            },
+        )
+    }
+
+    pub fn send(&self, command: SwitchCommand) -> Result<(), Error> {
+        match self.sender.send(command) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(Error::Connection(String::from("channel is not available"))),
+        }
+    }
+
+    pub fn try_recv(&self) -> Option<SwitchCommand> {
+        match self.receiver.try_recv() {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        }
+    }
+
+    pub fn recv(&self) -> Option<SwitchCommand> {
+        match self.receiver.recv() {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        }
+    }
+}
+
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
     pub fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
-        let (sender1, receiver1) = mpsc::channel();
-        let (sender2, receiver2) = mpsc::channel();
+        let (c1, c2) = Channel::new();
         let cache = Cache::new(limit);
         let handler = Handler::new(center.clone())?;
         let switch = Switch {
-            sender: sender1,
-            receiver: receiver2,
+            channel: c1,
             cache,
             handler: Arc::new(Mutex::new(handler)),
             table: Table::new(limit, center.clone()),
+            topics: TopicTable::new(),
         };
-        let interface = Interface {
-            sender: sender2,
-            receiver: receiver1,
-            center: center,
-        };
+        let interface = Interface::new(c2, center);
         Ok((switch, interface))
     }
 
@@ -118,13 +164,24 @@ impl Switch {
     pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
             // tcp messages
-            // TODO: handle errors
             match self.handler.lock().unwrap().read() {
                 Some(wire) => match wire.convert() {
                     Ok(t) => {
+                        log::info!("received new TCP message");
+                        log::trace!("new transaction: {:?}", t);
                         self.cache.add(t.clone());
-                        let message = SwitchCommand::UserAction(t);
-                        let _ = self.sender.send(message);
+                        match self.topics.get(&t.source()) {
+                            Some(topic) => {
+                                if topic.send(SwitchCommand::UserAction(t)).is_err() {
+                                    // TODO: Restart calls.
+                                    log::error!("Switch mpsc message could not be sent");
+                                }
+                            }
+                            None => {
+                                // TODO: Handle Kademlia
+                                log::error!("unknown topic");
+                            }
+                        }
                     }
                     Err(_) => {
                         continue;
@@ -134,28 +191,41 @@ impl Switch {
             }
 
             // user messages
-            match self.receiver.try_recv() {
-                Ok(data) => {
+            match self.channel.try_recv() {
+                Some(data) => {
                     match data {
                         SwitchCommand::UserAction(t) => {
+                            log::info!("sending new message");
+                            log::trace!("transaction: {:?}", t);
+                            // TODO: number of targets
                             let targets = self.table.get(&t.target(), 5);
+                            log::trace!("found following targets: {:?}", targets);
                             // on tcp fail update the RT (and fail the sending?)
                             for i in targets {
                                 // TODO: handle errors
-                                let _ = self.handler.lock().unwrap().send(t.to_wire(), i);
+                                let e = self.handler.lock().unwrap().send(t.to_wire(), i);
+                                if e.is_err() {
+                                    log::error!("tcp handler failed: {:?}", e);
+                                }
                             }
                         }
                         SwitchCommand::SwitchAction(action) => match action {
                             SwitchAction::Terminate => {
+                                log::info!("terminating handler thread");
                                 break;
                             }
                             SwitchAction::Cache => {
+                                log::info!("emptied the handler cache");
                                 self.cache.empty();
+                            }
+                            SwitchAction::Subscribe(t) => {
+                                log::info!("subscribed to new topic: {:?}", t.address());
+                                self.topics.add(t);
                             }
                         },
                     }
                 }
-                Err(_) => {
+                None => {
                     continue;
                 }
             }
@@ -231,6 +301,18 @@ mod tests {
         c.add(second);
         c.add(first.clone());
         assert_eq!(c.elements.len(), 1);
+    }
+
+    #[test]
+    fn test_channel() {
+        let (c1, c2) = Channel::new();
+        let t = transaction();
+        let h = std::thread::spawn(move || {
+            let _ = c1.send(SwitchCommand::UserAction(t));
+        });
+        h.join().unwrap();
+        let m = c2.recv();
+        assert_eq!(m.is_none(), false);
     }
 
     fn transaction() -> Transaction {

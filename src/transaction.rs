@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 /// The main object users will be interacting with to handle messages
 /// and events.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Transaction {
     /// Unique ID to avoid duplicate processing.
     uuid: Uuid,
@@ -132,6 +132,13 @@ impl Transaction {
         self.message.target.clone()
     }
 
+    /// Returns the Address of source of a message. This is simply a
+    /// shorthand function for reading the correct field but it
+    /// ensures privacy.
+    pub fn source(&self) -> Address {
+        self.message.source.clone()
+    }
+
     /// This function returns the duration since the Transaction was
     /// created. While it should mostly be without problems, it can
     /// fail if the OS clock is unreliable.
@@ -154,6 +161,14 @@ impl PartialOrd for Transaction {
         Some(self.cmp(&other))
     }
 }
+
+impl PartialEq for Transaction {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.uuid == rhs.uuid
+    }
+}
+
+impl Eq for Transaction {}
 
 impl Class {
     /// The class is serialized as a single byte, this function

@@ -56,7 +56,7 @@ impl From<()> for Error {
 
 impl<T> From<SendError<T>> for Error {
     fn from(_err: SendError<T>) -> Self {
-        Self::Connection(String::from("message could not be sent"))
+        Self::Connection(String::from("channel is no longer available"))
     }
 }
 

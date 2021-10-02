@@ -5,19 +5,16 @@
 //! in order to minimize size and make interactions with Wire data as
 //! easy as possible.
 
-use crate::node::Address;
-use crate::topic::{DataTopic, Topic};
-
 pub struct Database {
     pub path: String,
 }
 
 impl Database {
-    fn new(path: String) -> Self {
+    pub fn new(path: String) -> Self {
         Self { path }
     }
 
-    fn convert(bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    pub fn convert(bytes: Vec<u8>) -> Vec<Vec<u8>> {
         if bytes.len() < 42 {
             return Vec::new();
         }
@@ -46,6 +43,8 @@ impl Database {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::node::Address;
+    use crate::topic::DataTopic;
 
     #[test]
     fn test_convert_one() {

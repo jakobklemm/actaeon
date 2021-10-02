@@ -4,11 +4,11 @@ use crate::error::Error;
 use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
-use crate::switch::SwitchCommand;
+use crate::switch::Channel;
+use crate::switch::{SwitchAction, SwitchCommand};
 use crate::topic::Topic;
 use crate::transaction::Class;
 use crate::transaction::Transaction;
-use std::sync::mpsc::{Receiver, Sender};
 
 /// Starting the switch will create both Interface and Switch objects.
 /// The Interface will be passed up and to the user / instance. From
@@ -17,50 +17,91 @@ pub struct Interface {
     /// The SwitchInterface will implement recv/0 and try_recv/0
     /// functions, which will internally receive messages from the
     /// channel.
-    receiver: Receiver<SwitchCommand>,
-    /// Other direction of communication
-    sender: Sender<SwitchCommand>,
+    channel: Channel,
     /// Center used for getting message origins.
     center: Center,
 }
 
 impl Interface {
+    pub fn new(channel: Channel, center: Center) -> Self {
+        Self { channel, center }
+    }
+
     pub fn try_recv(&self) -> Option<Transaction> {
-        match self.receiver.try_recv() {
-            Ok(action) => match action {
-                SwitchCommand::SwitchAction(_s) => {
-                    // TODO: Handle SwitchActions, allow for custom user behaviour
+        // TODO: Handle action message types
+        match self.channel.try_recv() {
+            Some(s) => match s {
+                SwitchCommand::UserAction(t) => Some(t),
+                SwitchCommand::SwitchAction(a) => {
+                    log::info!("special switch action received: {:?}", a);
                     None
                 }
-                SwitchCommand::UserAction(t) => Some(t),
             },
-            Err(_) => None,
+            None => None,
         }
     }
 
     pub fn recv(&self) -> Option<Transaction> {
-        match self.receiver.recv() {
-            Ok(action) => match action {
-                SwitchCommand::SwitchAction(_s) => {
-                    // TODO: Handle SwitchActions, allow for custom user behaviour
+        // TODO: Handle action message types
+        match self.channel.recv() {
+            Some(s) => match s {
+                SwitchCommand::UserAction(t) => Some(t),
+                SwitchCommand::SwitchAction(a) => {
+                    log::info!("special switch action received: {:?}", a);
                     None
                 }
-                SwitchCommand::UserAction(t) => Some(t),
             },
-            Err(_) => None,
+            None => None,
         }
     }
 
     pub fn send(&self, m: Message) -> Result<(), Error> {
         let transaction = Transaction::new(m);
-        self.sender.send(SwitchCommand::UserAction(transaction))?;
+        self.channel.send(SwitchCommand::UserAction(transaction))?;
         Ok(())
     }
 
     pub fn subscribe(&self, address: Address) -> Result<Topic, Error> {
-        let message = Message::new(Class::Subscribe, self.center.public, address, Vec::new());
-        let transaction = Transaction::new(message);
-        self.sender.send(SwitchCommand::UserAction(transaction))?;
-        Ok(Topic::new(address))
+        let (c1, c2) = Channel::new();
+        let local = Topic::new(address.clone(), c1);
+        let remote = Topic::new(address.clone(), c2);
+        match self
+            .channel
+            .send(SwitchCommand::SwitchAction(SwitchAction::Subscribe(remote)))
+        {
+            Ok(()) => {
+                let message = Message::new(
+                    Class::Subscribe,
+                    self.center.public.clone(),
+                    address,
+                    Vec::new(),
+                );
+                let transaction = Transaction::new(message);
+
+                let e = self.channel.send(SwitchCommand::UserAction(transaction));
+                if e.is_err() {
+                    log::error!("handler thread failed: {:?}", e);
+                    return Err(Error::Connection(String::from(
+                        "handler thread not responding",
+                    )));
+                }
+            }
+            Err(e) => {
+                log::error!("handler thread failed: {:?}", e);
+                return Err(Error::Connection(String::from(
+                    "handler thread not responding",
+                )));
+            }
+        }
+        Ok(local)
+    }
+
+    pub fn terminate(&self) {
+        let e = self
+            .channel
+            .send(SwitchCommand::SwitchAction(SwitchAction::Terminate));
+        if e.is_err() {
+            log::error!("error terminating thread: {:?}", e);
+        }
     }
 }
