@@ -61,11 +61,6 @@ pub struct Wire {
 /// expanded to custom types using a trait. The class will be
 /// serialized to a single byte and parsed using a simple lookup
 /// table.
-///
-/// The current hard coded Classes:
-/// 0: Ping => Node Alive Check, internal.
-/// 1: Lookup => Node ID lookup, internal.
-/// 2: Action => User messages, custom.
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub enum Class {
     /// Internal IsAlive check
@@ -74,6 +69,8 @@ pub enum Class {
     Lookup,
     /// Messages for the user
     Action,
+    /// Subscribe to another topic
+    Subscribe,
 }
 
 impl Transaction {
@@ -166,6 +163,7 @@ impl Class {
             [0, 0, 0, 1] => Ok(Self::Ping),
             [0, 0, 0, 2] => Ok(Self::Lookup),
             [0, 0, 0, 3] => Ok(Self::Action),
+            [0, 0, 0, 4] => Ok(Self::Subscribe),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -179,6 +177,7 @@ impl Class {
             Self::Ping => [0, 0, 0, 1],
             Self::Lookup => [0, 0, 0, 2],
             Self::Action => [0, 0, 0, 3],
+            Self::Subscribe => [0, 0, 0, 4],
         }
     }
 }

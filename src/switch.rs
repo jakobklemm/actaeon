@@ -7,12 +7,14 @@
 //! the cache, each protocol then has its own module.
 
 use crate::error::Error;
-use crate::message::Message;
+use crate::interface::Interface;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
 use crate::transaction::Transaction;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 
 /// Each message being sent between the Listener Thead and User Thread
@@ -44,18 +46,6 @@ pub enum SwitchAction {
     Cache,
 }
 
-/// Starting the switch will create both Interface and Switch objects.
-/// The Interface will be passed up and to the user / instance. From
-/// there the user can interact (receive messages) with the listener.
-pub struct Interface {
-    /// The SwitchInterface will implement recv/0 and try_recv/0
-    /// functions, which will internally receive messages from the
-    /// channel.
-    receiver: Receiver<SwitchCommand>,
-    /// Other direction of communication
-    sender: Sender<SwitchCommand>,
-}
-
 /// Currently the system requires a dedicated thread for the listening
 /// server, which will autoamtically get started. The thread will hold
 /// a Switch object and send messages through the channel.
@@ -72,7 +62,7 @@ pub struct Switch {
     cache: Cache,
     /// Represents the TCP Handler, currently just one struct. Later
     /// this will be replaced by a trait Object.
-    handler: Handler,
+    handler: Arc<Mutex<Handler>>,
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
@@ -100,40 +90,6 @@ struct Cache {
     limit: usize,
 }
 
-impl Interface {
-    pub fn try_recv(&self) -> Option<Transaction> {
-        match self.receiver.try_recv() {
-            Ok(action) => match action {
-                SwitchCommand::SwitchAction(_s) => {
-                    // TODO: Handle SwitchActions, allow for custom user behaviour
-                    None
-                }
-                SwitchCommand::UserAction(t) => Some(t),
-            },
-            Err(_) => None,
-        }
-    }
-
-    pub fn recv(&self) -> Option<Transaction> {
-        match self.receiver.recv() {
-            Ok(action) => match action {
-                SwitchCommand::SwitchAction(_s) => {
-                    // TODO: Handle SwitchActions, allow for custom user behaviour
-                    None
-                }
-                SwitchCommand::UserAction(t) => Some(t),
-            },
-            Err(_) => None,
-        }
-    }
-
-    pub fn send(&self, m: Message) -> Result<(), Error> {
-        let transaction = Transaction::new(m);
-        self.sender.send(SwitchCommand::UserAction(transaction))?;
-        Ok(())
-    }
-}
-
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
@@ -146,12 +102,13 @@ impl Switch {
             sender: sender1,
             receiver: receiver2,
             cache,
-            handler,
-            table: Table::new(limit, center),
+            handler: Arc::new(Mutex::new(handler)),
+            table: Table::new(limit, center.clone()),
         };
         let interface = Interface {
             sender: sender2,
             receiver: receiver1,
+            center: center,
         };
         Ok((switch, interface))
     }
@@ -161,7 +118,8 @@ impl Switch {
     pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
             // tcp messages
-            match self.handler.read() {
+            // TODO: handle errors
+            match self.handler.lock().unwrap().read() {
                 Some(wire) => match wire.convert() {
                     Ok(t) => {
                         self.cache.add(t.clone());
@@ -183,7 +141,8 @@ impl Switch {
                             let targets = self.table.get(&t.target(), 5);
                             // on tcp fail update the RT (and fail the sending?)
                             for i in targets {
-                                let _ = self.handler.send(t.to_wire(), i);
+                                // TODO: handle errors
+                                let _ = self.handler.lock().unwrap().send(t.to_wire(), i);
                             }
                         }
                         SwitchCommand::SwitchAction(action) => match action {
