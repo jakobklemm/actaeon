@@ -13,6 +13,7 @@ use crate::router::Table;
 use crate::tcp::Handler;
 use crate::topic::{Topic, TopicTable};
 use crate::transaction::Transaction;
+use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -49,6 +50,8 @@ pub enum SwitchAction {
     Cache,
     /// Add a new entry to the TopicTable
     Subscribe(Topic),
+    /// Unsubscribe
+    Unsubscribe,
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -73,7 +76,7 @@ pub struct Switch {
     /// allow for the Updater Thread.
     table: Table,
     /// Holds a list of all currently active topics.
-    topics: TopicTable,
+    topics: RefCell<TopicTable>,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -153,14 +156,12 @@ impl Switch {
             cache,
             handler: Arc::new(Mutex::new(handler)),
             table: Table::new(limit, center.clone()),
-            topics: TopicTable::new(),
+            topics: RefCell::new(TopicTable::new()),
         };
         let interface = Interface::new(c2, center);
         Ok((switch, interface))
     }
 
-    /// TODO: Add tracing for invalid messages and sending errors that
-    /// can't be returned.
     pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
             // tcp messages
@@ -170,7 +171,7 @@ impl Switch {
                         log::info!("received new TCP message");
                         log::trace!("new transaction: {:?}", t);
                         self.cache.add(t.clone());
-                        match self.topics.get(&t.source()) {
+                        match self.topics.borrow().get(&t.source()) {
                             Some(topic) => {
                                 if topic.send(SwitchCommand::UserAction(t)).is_err() {
                                     // TODO: Restart calls.
@@ -220,13 +221,62 @@ impl Switch {
                             }
                             SwitchAction::Subscribe(t) => {
                                 log::info!("subscribed to new topic: {:?}", t.address());
-                                self.topics.add(t);
+                                self.topics.borrow_mut().add(t);
+                            }
+                            SwitchAction::Unsubscribe => {
+                                log::warn!("unable to unsubscribe from unknown topic");
                             }
                         },
                     }
                 }
                 None => {
                     continue;
+                }
+            }
+
+            for topic in &self.topics.borrow().topics {
+                match topic.try_recv() {
+                    Some(data) => {
+                        match data {
+                            SwitchCommand::UserAction(t) => {
+                                log::info!("sending new message");
+                                log::trace!("transaction: {:?}", t);
+                                // TODO: number of targets
+                                let targets = self.table.get(&t.target(), 5);
+                                log::trace!("found following targets: {:?}", targets);
+                                // on tcp fail update the RT (and fail the sending?)
+                                for i in targets {
+                                    // TODO: handle errors
+                                    let e = self.handler.lock().unwrap().send(t.to_wire(), i);
+                                    if e.is_err() {
+                                        log::error!("tcp handler failed: {:?}", e);
+                                    }
+                                }
+                            }
+                            SwitchCommand::SwitchAction(action) => match action {
+                                SwitchAction::Terminate => {
+                                    log::info!("terminating handler thread");
+                                    break;
+                                }
+                                SwitchAction::Cache => {
+                                    log::info!("emptied the handler cache");
+                                    self.cache.empty();
+                                }
+                                SwitchAction::Subscribe(t) => {
+                                    log::info!("subscribed to new topic: {:?}", t.address());
+                                }
+                                SwitchAction::Unsubscribe => {
+                                    let e = self.topics.borrow_mut().remove(&topic.address());
+                                    if e.is_err() {
+                                        log::error!("unable to unsubscribe from unknown topic");
+                                    }
+                                }
+                            },
+                        }
+                    }
+                    None => {
+                        continue;
+                    }
                 }
             }
         });

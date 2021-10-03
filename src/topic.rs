@@ -8,8 +8,11 @@
 //! user.
 
 use crate::error::Error;
-use crate::node::Address;
-use crate::switch::{Channel, SwitchCommand};
+use crate::message::Message;
+use crate::node::{Address, Center};
+use crate::switch::{Channel, SwitchAction, SwitchCommand};
+use crate::transaction::{Class, Transaction};
+use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct DataTopic {
@@ -25,8 +28,13 @@ pub struct Topic {
     channel: Channel,
 }
 
+/// A simple structure to store a collection of Topics. This will be
+/// used in two ways, both on the Handler Thread:
+///
+/// - To store all Topics the user has subscribed to. The table will
+/// hold the Channels for receiving Messages.
 pub struct TopicTable {
-    topics: Vec<Topic>,
+    pub topics: Vec<Topic>,
 }
 
 impl DataTopic {
@@ -71,36 +79,85 @@ impl DataTopic {
 }
 
 impl Topic {
+    /// Creates a new Topic with a given Channel. This Topic is meant
+    /// to be used both by the User and the Handler Thread. This
+    /// function is not meant to be called by the user, since it
+    /// requires the linked Channel to be stored on the Handler
+    /// therad. Instead new Topics have to be created through the
+    /// interface.
     pub fn new(address: Address, channel: Channel) -> Self {
         Self { address, channel }
     }
 
+    /// Tries to get the most recent message from the Topic. It will
+    /// never block and will return None should no message be in the
+    /// buffer. Currently it will also return None should the Thread
+    /// or the Channel be unavailable.
     pub fn try_recv(&self) -> Option<SwitchCommand> {
         self.channel.try_recv()
     }
 
+    /// Same as try_recv, but it will block until a mesage is
+    /// available. It will still return an Option, which currently
+    /// just represents error states.
     pub fn recv(&self) -> Option<SwitchCommand> {
         self.channel.recv()
     }
 
+    /// Sends a message (SwitchCommand) to the Handler thread, where
+    /// it will get sent out over TCP.
     pub fn send(&self, c: SwitchCommand) -> Result<(), Error> {
         self.channel.send(c)
     }
 
+    /// Shorthand function to get the Address of a Topic.
     pub fn address(&self) -> Address {
         self.address.clone()
+    }
+
+    /// Constructs a new Transaction to the given Topic. It currently
+    /// requires the Center to be passed along in order to get the
+    /// source Address, this might have to get reworked.
+    pub fn parse(&self, body: Vec<u8>, center: &Center) -> SwitchCommand {
+        let message = Message::new(
+            Class::Action,
+            center.public.clone(),
+            self.address.clone(),
+            body,
+        );
+        SwitchCommand::UserAction(Transaction::new(message))
+    }
+}
+
+impl Deref for Topic {
+    type Target = Address;
+
+    fn deref(&self) -> &Self::Target {
+        let e = self
+            .channel
+            .send(SwitchCommand::SwitchAction(SwitchAction::Unsubscribe));
+        if e.is_err() {
+            log::error!("channel no longer available");
+        }
+        &self.address
     }
 }
 
 impl TopicTable {
+    /// Constructs a new TopicTable, meant to be called at startup by
+    /// the Handler thread.
     pub fn new() -> Self {
         Self { topics: Vec::new() }
     }
 
+    /// Adds a new Topic to the Table. The TopicTable currently has no
+    /// size limitations or replacement rules so this will never fail.
     pub fn add(&mut self, topic: Topic) {
         self.topics.push(topic);
     }
 
+    /// Removes a Topic from the Table. It will only fail if the Topic
+    /// isn't there.
     pub fn remove(&mut self, target: &Address) -> Result<(), Error> {
         let index = self.topics.iter().position(|e| &e.address == target);
         match index {
@@ -112,6 +169,8 @@ impl TopicTable {
         }
     }
 
+    /// Returns a pointer to the Topic with the matching Address. Will
+    /// return None if the Address is unknown.
     pub fn get(&self, address: &Address) -> Option<&Topic> {
         let index = self.topics.iter().position(|e| &e.address == address);
         match index {
@@ -120,6 +179,7 @@ impl TopicTable {
         }
     }
 
+    /// Shorthand function to get the size of the array.
     pub fn len(&self) -> usize {
         self.topics.len()
     }
