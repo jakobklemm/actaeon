@@ -8,11 +8,12 @@
 
 use crate::error::Error;
 use crate::interface::Interface;
+use crate::message::Message;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
 use crate::topic::{HandlerTopic, Topic, TopicTable};
-use crate::transaction::Transaction;
+use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -233,8 +234,21 @@ impl Switch {
                             }
                             SwitchAction::Subscribe(t) => {
                                 log::info!("subscribed to new topic: {:?}", t.address());
+                                let target = t.address();
                                 let ht = HandlerTopic::convert(t);
                                 self.topics.borrow_mut().add(ht);
+                                let message = Message::new(
+                                    Class::Subscribe,
+                                    self.table.center().clone(),
+                                    target,
+                                    Vec::new(),
+                                );
+                                let transaction = Transaction::new(message);
+
+                                let e = self.channel.send(SwitchCommand::UserAction(transaction));
+                                if e.is_err() {
+                                    log::error!("handler thread failed: {:?}", e);
+                                }
                             }
                             SwitchAction::Unsubscribe => {
                                 log::warn!("unable to unsubscribe from unknown topic");

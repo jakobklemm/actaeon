@@ -163,6 +163,12 @@ impl Table {
     pub fn len(&self) -> usize {
         self.root.len()
     }
+
+    /// Return the Address of the Center. Shorthand for the public
+    /// field.
+    pub fn center(&self) -> Address {
+        self.center.public.clone()
+    }
 }
 
 impl Element {

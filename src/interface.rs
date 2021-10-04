@@ -84,6 +84,7 @@ impl Interface {
                 let e = self.channel.send(SwitchCommand::UserAction(transaction));
                 if e.is_err() {
                     log::error!("handler thread failed: {:?}", e);
+                    // TODO: Add restart function.
                     return Err(Error::Connection(String::from(
                         "handler thread not responding",
                     )));
