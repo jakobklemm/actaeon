@@ -11,7 +11,7 @@ use crate::interface::Interface;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
-use crate::topic::{Topic, TopicTable};
+use crate::topic::{HandlerTopic, Topic, TopicTable};
 use crate::transaction::Transaction;
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -75,7 +75,9 @@ pub struct Switch {
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
     table: Table,
-    /// Holds a list of all currently active topics.
+    /// Holds a list of all currently active topics. The data is in a
+    /// RefCell in order to make interactions in the Thread closure
+    /// easier.
     topics: RefCell<TopicTable>,
 }
 
@@ -100,6 +102,7 @@ struct Cache {
     limit: usize,
 }
 
+/// TODO: Handle crash / restart cases.
 #[derive(Debug)]
 pub struct Channel {
     sender: Sender<SwitchCommand>,
@@ -107,6 +110,8 @@ pub struct Channel {
 }
 
 impl Channel {
+    /// Creates a new pair of Channels. Since two of them are always
+    /// connected they have to be created together.
     pub fn new() -> (Self, Self) {
         let (s1, r1) = mpsc::channel();
         let (s2, r2) = mpsc::channel();
@@ -122,6 +127,9 @@ impl Channel {
         )
     }
 
+    /// Sends a message through the Channel. This can fail if the
+    /// remote socket is unavailable. Currently this error case is not
+    /// handled.
     pub fn send(&self, command: SwitchCommand) -> Result<(), Error> {
         match self.sender.send(command) {
             Ok(()) => Ok(()),
@@ -129,6 +137,9 @@ impl Channel {
         }
     }
 
+    /// Like send this is also a wrapper around the mpsc try_recv
+    /// method. Currently error are not getting handled and if the
+    /// socket is unavailable None will be returned.
     pub fn try_recv(&self) -> Option<SwitchCommand> {
         match self.receiver.try_recv() {
             Ok(m) => Some(m),
@@ -136,6 +147,9 @@ impl Channel {
         }
     }
 
+    /// Like send this is also a wrapper around the mpsc recv method.
+    /// Currently error are not getting handled and if the socket is
+    /// unavailable None will be returned.
     pub fn recv(&self) -> Option<SwitchCommand> {
         match self.receiver.recv() {
             Ok(m) => Some(m),
@@ -173,7 +187,7 @@ impl Switch {
                         self.cache.add(t.clone());
                         match self.topics.borrow().get(&t.source()) {
                             Some(topic) => {
-                                if topic.send(SwitchCommand::UserAction(t)).is_err() {
+                                if topic.channel.send(SwitchCommand::UserAction(t)).is_err() {
                                     // TODO: Restart calls.
                                     log::error!("Switch mpsc message could not be sent");
                                 }
@@ -184,11 +198,9 @@ impl Switch {
                             }
                         }
                     }
-                    Err(_) => {
-                        continue;
-                    }
+                    Err(_) => {}
                 },
-                None => continue,
+                None => {}
             }
 
             // user messages
@@ -221,7 +233,8 @@ impl Switch {
                             }
                             SwitchAction::Subscribe(t) => {
                                 log::info!("subscribed to new topic: {:?}", t.address());
-                                self.topics.borrow_mut().add(t);
+                                let ht = HandlerTopic::convert(t);
+                                self.topics.borrow_mut().add(ht);
                             }
                             SwitchAction::Unsubscribe => {
                                 log::warn!("unable to unsubscribe from unknown topic");
@@ -229,13 +242,11 @@ impl Switch {
                         },
                     }
                 }
-                None => {
-                    continue;
-                }
+                None => {}
             }
 
             for topic in &self.topics.borrow().topics {
-                match topic.try_recv() {
+                match topic.channel.try_recv() {
                     Some(data) => {
                         match data {
                             SwitchCommand::UserAction(t) => {
@@ -266,7 +277,7 @@ impl Switch {
                                     log::info!("subscribed to new topic: {:?}", t.address());
                                 }
                                 SwitchAction::Unsubscribe => {
-                                    let e = self.topics.borrow_mut().remove(&topic.address());
+                                    let e = self.topics.borrow_mut().remove(&topic.address);
                                     if e.is_err() {
                                         log::error!("unable to unsubscribe from unknown topic");
                                     }
@@ -274,9 +285,7 @@ impl Switch {
                             },
                         }
                     }
-                    None => {
-                        continue;
-                    }
+                    None => {}
                 }
             }
         });
@@ -311,6 +320,7 @@ impl Cache {
         self.elements.truncate(self.limit);
     }
 
+    /// Clears the cache.
     fn empty(&mut self) {
         self.elements = Vec::new();
     }

@@ -15,29 +15,87 @@ use crate::transaction::{Class, Transaction};
 use std::ops::Deref;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Dedicated datastructure for representing the data in the Database.
+/// It also stores a timestamp (which is currently not used) and a
+/// dedicated length field, which makes reading it from the Database
+/// possible. This will be the kind of Topic representing the "local"
+/// topics, so some additional data is required.
 pub struct DataTopic {
+    /// Same as the Topic Address, main identification of each Topic.
     address: Address,
+    /// List of Subscribers, each one currently just consisting of the
+    /// Address, not the Node.
     subscribers: Vec<Address>,
+    /// Currently unused timestamp of the last time it was used. This
+    /// should allow to delete too old Topics.
     timestamp: SystemTime,
+    /// Since the Database only stores binary data the length of each
+    /// Topic has to be stored directly in the beginning. It consists
+    /// of two u8 values:
+    ///
+    /// - The first one representing the number of 255 byte blocks.
+    ///
+    /// - The second one stores the number of bytes in the last,
+    /// incomplete block.
+    ///
+    /// This method is a lot easier than having a "length of length"
+    /// but with two bytes a maximum object size of 65 kilo bytes is
+    /// possible.
     length: [u8; 2],
 }
 
+/// The main structure for representing Topics in the system. It will
+/// be the main interaction point for the user. Each Topic the user
+/// has will also require a copy of the same Topic in the Handler
+/// Thread. The only difference between the two is the opposing
+/// Channel, with which the two can communicate.
+/// TODO: The thread might require a dedicated struct.
+/// TODO: Add methods for fetching fields.
 #[derive(Debug)]
 pub struct Topic {
-    address: Address,
-    channel: Channel,
+    /// Throughout the entire system all components have the same
+    /// Address type. Each Topic also has a uniqe Address, which can
+    /// be generated through any number of ways.
+    pub address: Address,
+    /// Since each Topic can receive messages individually a dedicated
+    /// Channel (mpsc connection) is required.
+    pub channel: Channel,
 }
 
-/// A simple structure to store a collection of Topics. This will be
-/// used in two ways, both on the Handler Thread:
-///
-/// - To store all Topics the user has subscribed to. The table will
-/// hold the Channels for receiving Messages.
+/// A simple structure to store a collection of Topics. Since the
+/// normal Topics use a custom implementation of Deref the thread has
+/// to use a different structure, which is identically but doesn't
+/// implement the same methodhs.
 pub struct TopicTable {
-    pub topics: Vec<Topic>,
+    pub topics: Vec<HandlerTopic>,
+}
+
+/// Since the Topic implements Deref a different structure needs to be
+/// used on the thread. Since most of the functions on the topic are
+/// wrappers around the Channel, this structure simply has all fields
+/// as public. It should only ever used internally.
+pub struct HandlerTopic {
+    /// Same fields as Topic.
+    pub address: Address,
+    /// Interactions can be made directly with the Channel instead of
+    /// going through an interface.
+    pub channel: Channel,
+}
+
+impl HandlerTopic {
+    /// Takes in a topic and returns a HandlerTopic. Since the two
+    /// have identical fields no real conversion is required.
+    pub fn convert(topic: Topic) -> Self {
+        Self {
+            address: topic.address,
+            channel: topic.channel,
+        }
+    }
 }
 
 impl DataTopic {
+    /// Creates a new DataTopic with no subscribers and the current
+    /// timestamp. The length will also be initiated correctly.
     pub fn new(address: Address) -> Self {
         Self {
             address,
@@ -47,6 +105,9 @@ impl DataTopic {
         }
     }
 
+    /// Converts a DataTopic to bytes. This could fail if the
+    /// SystemTime is off by too much, but that should have been
+    /// validated on startup.
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut data = self.length.to_vec();
         // This will fail only if the SystemTiem is before UNIX_EPOCH,
@@ -62,11 +123,15 @@ impl DataTopic {
         return data;
     }
 
+    /// Adds a new subscriber to the DataTopic. This will have to be
+    /// integrated with a partial update function in the Database.
     pub fn subscribe(&mut self, address: Address) {
         self.subscribers.push(address);
         self.update_length();
     }
 
+    /// Computes the updated length for the DataTopic using the
+    /// described method.
     fn update_length(&mut self) {
         let mut base: usize = 42;
         for _ in 0..self.subscribers.len() {
@@ -132,11 +197,15 @@ impl Topic {
 impl Deref for Topic {
     type Target = Address;
 
+    /// Should a Topic held by the user go out of scope it also needs
+    /// to be deleted in the Handler thread.
     fn deref(&self) -> &Self::Target {
         let e = self
             .channel
             .send(SwitchCommand::SwitchAction(SwitchAction::Unsubscribe));
         if e.is_err() {
+            // this might not work since the Topic will be derefed on
+            // both ends.
             log::error!("channel no longer available");
         }
         &self.address
@@ -152,7 +221,7 @@ impl TopicTable {
 
     /// Adds a new Topic to the Table. The TopicTable currently has no
     /// size limitations or replacement rules so this will never fail.
-    pub fn add(&mut self, topic: Topic) {
+    pub fn add(&mut self, topic: HandlerTopic) {
         self.topics.push(topic);
     }
 
@@ -171,7 +240,7 @@ impl TopicTable {
 
     /// Returns a pointer to the Topic with the matching Address. Will
     /// return None if the Address is unknown.
-    pub fn get(&self, address: &Address) -> Option<&Topic> {
+    pub fn get(&self, address: &Address) -> Option<&HandlerTopic> {
         let index = self.topics.iter().position(|e| &e.address == address);
         match index {
             Some(i) => self.topics.get(i),
@@ -225,7 +294,7 @@ mod tests {
     fn test_topictable_get() {
         let mut table = TopicTable::new();
         let t = gen_topic();
-        table.add(t);
+        table.add(HandlerTopic::convert(t));
         assert_eq!(table.len(), 1);
     }
 
@@ -234,7 +303,7 @@ mod tests {
         let mut table = TopicTable::new();
         let t = gen_topic();
         let a = t.address.clone();
-        table.add(t);
+        table.add(HandlerTopic::convert(t));
         table.remove(&a).unwrap();
         assert_eq!(table.len(), 0);
     }

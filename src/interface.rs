@@ -23,6 +23,9 @@ pub struct Interface {
 }
 
 impl Interface {
+    /// Creates a new Interface. This function is currently one of the
+    /// core components of starting up the system. In the future this
+    /// might have to be wrapped by a start function.
     pub fn new(channel: Channel, center: Center) -> Self {
         Self { channel, center }
     }
