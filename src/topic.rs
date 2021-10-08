@@ -8,7 +8,7 @@
 //! user.
 
 use crate::error::Error;
-use crate::message::{Message, Body};
+use crate::message::Message;
 use crate::node::{Address, Center};
 use crate::switch::{Channel, SwitchAction, SwitchCommand};
 use crate::transaction::{Class, Transaction};
@@ -89,11 +89,9 @@ impl Topic {
         self.channel.recv()
     }
 
-    /// Sends a message (SwitchCommand) to the Handler thread, where
-    /// it will get sent out over TCP.
-    pub fn send(&self, m: Body) -> Result<(), Error> {
-	let m = 
-        self.channel.send(c)
+    /// Sends a message
+    pub fn send(&self, t: Transaction) -> Result<(), Error> {
+        self.channel.send(SwitchCommand::UserAction(t))
     }
 
     /// Shorthand function to get the Address of a Topic.
@@ -205,7 +203,7 @@ mod tests {
         let t1 = Topic::new(Address::generate("abc").unwrap(), c1);
         let t2 = Topic::new(Address::generate("abc").unwrap(), c2);
         let handle = std::thread::spawn(move || {
-            let _ = t1.send(SwitchCommand::UserAction(transaction()));
+            let _ = t1.send(transaction());
         });
         handle.join().unwrap();
         let m = t2.recv();

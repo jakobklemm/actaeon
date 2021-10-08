@@ -71,6 +71,8 @@ pub enum Class {
     Action,
     /// Subscribe to another topic
     Subscribe,
+    /// A new subscriber was added
+    Subscribed,
 }
 
 impl Transaction {
@@ -179,6 +181,7 @@ impl Class {
             [0, 0, 0, 2] => Ok(Self::Lookup),
             [0, 0, 0, 3] => Ok(Self::Action),
             [0, 0, 0, 4] => Ok(Self::Subscribe),
+            [0, 0, 0, 5] => Ok(Self::Subscribed),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -193,6 +196,7 @@ impl Class {
             Self::Lookup => [0, 0, 0, 2],
             Self::Action => [0, 0, 0, 3],
             Self::Subscribe => [0, 0, 0, 4],
+            Self::Subscribed => [0, 0, 0, 5],
         }
     }
 }
