@@ -10,7 +10,7 @@
 use crate::error::Error;
 use crate::message::Message;
 use crate::node::{Address, Center};
-use crate::switch::{Channel, SwitchAction, SwitchCommand};
+use crate::switch::{Channel, Command, SwitchAction, SystemAction};
 use crate::transaction::{Class, Transaction};
 use std::ops::Deref;
 
@@ -30,26 +30,35 @@ pub struct Topic {
     /// Since each Topic can receive messages individually a dedicated
     /// Channel (mpsc connection) is required.
     pub channel: Channel,
-}
-
-/// A simple structure to store a collection of Topics. Since the
-/// normal Topics use a custom implementation of Deref the thread has
-/// to use a different structure, which is identically but doesn't
-/// implement the same methodhs.
-pub struct TopicTable {
-    pub topics: Vec<HandlerTopic>,
+    /// List of subscribers
+    subscribers: SubscriberBucket,
 }
 
 /// Since the Topic implements Deref a different structure needs to be
 /// used on the thread. Since most of the functions on the topic are
 /// wrappers around the Channel, this structure simply has all fields
 /// as public. It should only ever used internally.
+#[derive(Debug)]
 pub struct HandlerTopic {
     /// Same fields as Topic.
     pub address: Address,
     /// Interactions can be made directly with the Channel instead of
     /// going through an interface.
     pub channel: Channel,
+}
+
+/// A simple structure to store a collection of Topics. Since the
+/// normal Topics use a custom implementation of Deref the thread has
+/// to use a different structure, which is identically but doesn't
+/// implement the same methodhs.
+#[derive(Debug)]
+pub struct TopicBucket {
+    topics: Vec<HandlerTopic>,
+}
+
+#[derive(Debug)]
+struct SubscriberBucket {
+    subscribers: Vec<Address>,
 }
 
 impl HandlerTopic {
@@ -70,46 +79,63 @@ impl Topic {
     /// requires the linked Channel to be stored on the Handler
     /// therad. Instead new Topics have to be created through the
     /// interface.
-    pub fn new(address: Address, channel: Channel) -> Self {
-        Self { address, channel }
+    pub fn new(address: Address, channel: Channel, subscribers: Vec<Address>) -> Self {
+        Self {
+            address,
+            channel,
+            subscribers: SubscriberBucket::new(subscribers),
+        }
     }
 
-    /// Tries to get the most recent message from the Topic. It will
-    /// never block and will return None should no message be in the
-    /// buffer. Currently it will also return None should the Thread
-    /// or the Channel be unavailable.
-    pub fn try_recv(&self) -> Option<SwitchCommand> {
-        self.channel.try_recv()
+    pub fn recv(&mut self) -> Option<Message> {
+        match self.channel.recv() {
+            Some(m) => match m {
+                Command::User(t) => {
+                    return Some(t.message);
+                }
+                Command::System(action) => match action {
+                    SystemAction::Subscribe(a) => {
+                        self.subscribers.add(a);
+                        return None;
+                    }
+                    SystemAction::Unsubscribe(a) => {
+                        let _ = self.subscribers.remove(&a);
+                        return None;
+                    }
+                },
+                _ => {
+                    return None;
+                }
+            },
+            None => {
+                return None;
+            }
+        }
     }
 
-    /// Same as try_recv, but it will block until a mesage is
-    /// available. It will still return an Option, which currently
-    /// just represents error states.
-    pub fn recv(&self) -> Option<SwitchCommand> {
-        self.channel.recv()
-    }
-
-    /// Sends a message
-    pub fn send(&self, t: Transaction) -> Result<(), Error> {
-        self.channel.send(SwitchCommand::UserAction(t))
+    /// Sends a message to all subscribed Addresses.
+    pub fn broadcast(&mut self, t: Transaction) -> Result<(), Error> {
+        loop {
+            match self.channel.try_recv() {
+                Some(m) => match m {
+                    Command::System(action) => match action {
+                        SystemAction::Subscribe(a) => self.subscribers.add(a),
+                        SystemAction::Unsubscribe(a) => self.subscribers.add(a),
+                        _ => continue,
+                    },
+                    _ => continue,
+                },
+                None => {
+                    break;
+                }
+            }
+        }
+        self.channel.send(Command::User(t))
     }
 
     /// Shorthand function to get the Address of a Topic.
     pub fn address(&self) -> Address {
         self.address.clone()
-    }
-
-    /// Constructs a new Transaction to the given Topic. It currently
-    /// requires the Center to be passed along in order to get the
-    /// source Address, this might have to get reworked.
-    pub fn parse(&self, body: Vec<u8>, center: &Center) -> SwitchCommand {
-        let message = Message::new(
-            Class::Action,
-            center.public.clone(),
-            self.address.clone(),
-            body,
-        );
-        SwitchCommand::UserAction(Transaction::new(message))
     }
 }
 
@@ -121,7 +147,7 @@ impl Deref for Topic {
     fn deref(&self) -> &Self::Target {
         let e = self
             .channel
-            .send(SwitchCommand::SwitchAction(SwitchAction::Unsubscribe));
+            .send(Command::Switch(SwitchAction::Unsubscribe));
         if e.is_err() {
             // this might not work since the Topic will be derefed on
             // both ends.
@@ -131,21 +157,67 @@ impl Deref for Topic {
     }
 }
 
-impl TopicTable {
-    /// Constructs a new TopicTable, meant to be called at startup by
-    /// the Handler thread.
+impl SubscriberBucket {
+    pub fn new(subscribers: Vec<Address>) -> Self {
+        Self { subscribers }
+    }
+
+    pub fn sort(&mut self) {
+        self.subscribers.sort();
+    }
+
+    pub fn add(&mut self, address: Address) {
+        self.subscribers.push(address)
+    }
+
+    pub fn find(&self, search: &Address) -> Option<&Address> {
+        let index = self.subscribers.iter().position(|e| e == search);
+        match index {
+            Some(i) => self.subscribers.get(i),
+            None => None,
+        }
+    }
+
+    pub fn remove(&mut self, target: &Address) -> Result<(), Error> {
+        let index = self.subscribers.iter().position(|e| e == target);
+        match index {
+            Some(i) => {
+                self.subscribers.remove(i);
+                Ok(())
+            }
+            None => Err(Error::Unknown),
+        }
+    }
+
+    pub fn dedup(&mut self) {
+        self.sort();
+        self.subscribers.dedup_by(|a, b| a == b);
+    }
+
+    pub fn len(&self) -> usize {
+        self.subscribers.len()
+    }
+}
+
+impl TopicBucket {
     pub fn new() -> Self {
         Self { topics: Vec::new() }
     }
 
-    /// Adds a new Topic to the Table. The TopicTable currently has no
-    /// size limitations or replacement rules so this will never fail.
     pub fn add(&mut self, topic: HandlerTopic) {
-        self.topics.push(topic);
+        if self.find(&topic.address).is_none() {
+            self.topics.push(topic)
+        }
     }
 
-    /// Removes a Topic from the Table. It will only fail if the Topic
-    /// isn't there.
+    pub fn find(&self, search: &Address) -> Option<&HandlerTopic> {
+        let index = self.topics.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => self.topics.get(i),
+            None => None,
+        }
+    }
+
     pub fn remove(&mut self, target: &Address) -> Result<(), Error> {
         let index = self.topics.iter().position(|e| &e.address == target);
         match index {
@@ -157,17 +229,6 @@ impl TopicTable {
         }
     }
 
-    /// Returns a pointer to the Topic with the matching Address. Will
-    /// return None if the Address is unknown.
-    pub fn get(&self, address: &Address) -> Option<&HandlerTopic> {
-        let index = self.topics.iter().position(|e| &e.address == address);
-        match index {
-            Some(i) => self.topics.get(i),
-            None => None,
-        }
-    }
-
-    /// Shorthand function to get the size of the array.
     pub fn len(&self) -> usize {
         self.topics.len()
     }
@@ -181,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_topictable_get() {
-        let mut table = TopicTable::new();
+        let mut table = TopicBucket::new();
         let t = gen_topic();
         table.add(HandlerTopic::convert(t));
         assert_eq!(table.len(), 1);
@@ -189,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_topictable_remove() {
-        let mut table = TopicTable::new();
+        let mut table = TopicBucket::new();
         let t = gen_topic();
         let a = t.address.clone();
         table.add(HandlerTopic::convert(t));
@@ -197,22 +258,9 @@ mod tests {
         assert_eq!(table.len(), 0);
     }
 
-    #[test]
-    fn test_topic_channel() {
-        let (c1, c2) = Channel::new();
-        let t1 = Topic::new(Address::generate("abc").unwrap(), c1);
-        let t2 = Topic::new(Address::generate("abc").unwrap(), c2);
-        let handle = std::thread::spawn(move || {
-            let _ = t1.send(transaction());
-        });
-        handle.join().unwrap();
-        let m = t2.recv();
-        assert_eq!(m.is_none(), false);
-    }
-
     fn gen_topic() -> Topic {
         let (channel, _) = Channel::new();
-        Topic::new(Address::generate("abc").unwrap(), channel)
+        Topic::new(Address::generate("abc").unwrap(), channel, Vec::new())
     }
 
     fn transaction() -> Transaction {

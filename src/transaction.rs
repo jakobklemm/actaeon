@@ -30,7 +30,7 @@ pub struct Transaction {
     /// be disregarded.
     created: SystemTime,
     /// The actual message (not just the body but also connection data).
-    message: Message,
+    pub message: Message,
 }
 
 /// The Transaction and Message data will be converted into "Wire" and

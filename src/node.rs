@@ -176,6 +176,18 @@ impl Address {
         }
     }
 
+    /// Most of the times addresses will be created from bytes coming
+    /// over the network, this function can be used, although it might
+    /// fail if the key is invalid. Mostly the same as from_bytes/1
+    /// but only takes a reference.
+    pub fn from_slice(bytes: &[u8; 32]) -> Result<Self, Error> {
+        if let Some(public) = PublicKey::from_slice(bytes) {
+            Ok(Self { key: public })
+        } else {
+            Err(Error::Invalid(String::from("public key is invalid")))
+        }
+    }
+
     /// Returns an array of bytes of the public key / address.
     /// Currently it does not return a slice or reference to the
     /// bytes, instead it creates a new array. This should make it

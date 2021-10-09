@@ -5,12 +5,10 @@
 //! in order to minimize size and make interactions with Wire data as
 //! easy as possible.
 
+use crate::error::Error;
 use crate::node::Address;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-pub struct Database {
-    pub path: String,
-}
+pub struct Database {}
 
 /// Dedicated datastructure for representing the data in the Database.
 /// It also stores a timestamp (which is currently not used) and a
@@ -23,9 +21,6 @@ pub struct DataTopic {
     /// List of Subscribers, each one currently just consisting of the
     /// Address, not the Node.
     subscribers: Vec<Address>,
-    /// Currently unused timestamp of the last time it was used. This
-    /// should allow to delete too old Topics.
-    timestamp: SystemTime,
     /// Since the Database only stores binary data the length of each
     /// Topic has to be stored directly in the beginning. It consists
     /// of two u8 values:
@@ -42,11 +37,11 @@ pub struct DataTopic {
 }
 
 impl Database {
-    pub fn new(path: String) -> Self {
-        Self { path }
+    pub fn new() -> Self {
+        Self {}
     }
 
-    pub fn convert(bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    pub fn split(bytes: Vec<u8>) -> Vec<Vec<u8>> {
         if bytes.len() < 42 {
             return Vec::new();
         }
@@ -70,6 +65,12 @@ impl Database {
 
         return raw;
     }
+
+    pub fn convert(bytes: Vec<Vec<u8>>) -> Vec<DataTopic> {
+        let mut topics = Vec::new();
+        for i in bytes {}
+        return topics;
+    }
 }
 
 impl DataTopic {
@@ -79,8 +80,7 @@ impl DataTopic {
         Self {
             address,
             subscribers: Vec::new(),
-            timestamp: SystemTime::now(),
-            length: [0, 42],
+            length: [0, 36],
         }
     }
 
@@ -89,17 +89,48 @@ impl DataTopic {
     /// validated on startup.
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut data = self.length.to_vec();
-        // This will fail only if the SystemTiem is before UNIX_EPOCH,
-        // which is unlikely or easily fixed.
-        // TODO: Add SystemTime to startup validation.
-        let diff = self.timestamp.duration_since(UNIX_EPOCH).unwrap();
-        let time = diff.as_secs().to_be_bytes();
         data.append(&mut self.address.as_bytes().to_vec());
-        data.append(&mut time.to_vec());
         for i in &self.subscribers {
             data.append(&mut i.as_bytes().to_vec());
         }
         return data;
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, Error> {
+        if bytes.len() < 36 {
+            return Err(Error::Invalid(String::from("data is invalid")));
+        }
+        let mut length: [u8; 2] = [0, 0];
+        let mut address: [u8; 32] = [0; 32];
+        let mut subs: Vec<u8> = Vec::new();
+        for (i, j) in bytes.iter().enumerate() {
+            if i <= 1 {
+                length[i] = *j;
+            } else if i >= 2 && i <= 33 {
+                address[i - 2] = *j;
+            } else {
+                subs[i - 36] = *j;
+            }
+        }
+
+        if subs.len() % 32 != 0 {
+            return Err(Error::Invalid(String::from("data is invalid")));
+        }
+        let mut subscribers = subs.chunks_exact(32);
+        let mut composed: Vec<Address> = Vec::new();
+        for i in subscribers {
+            let mut bts: [u8; 32] = [0; 32];
+            for (i, j) in bts.iter().enumerate() {
+                bts[i] = *j;
+            }
+            let addr = Address::from_bytes(bts)?;
+            composed.push(addr);
+        }
+        Ok(Self {
+            address: Address::from_bytes(address)?,
+            length: length,
+            subscribers: composed,
+        })
     }
 
     /// Adds a new subscriber to the DataTopic. This will have to be

@@ -5,7 +5,7 @@ use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
 use crate::switch::Channel;
-use crate::switch::{SwitchAction, SwitchCommand};
+use crate::switch::{Command, SwitchAction};
 use crate::topic::Topic;
 use crate::transaction::Class;
 use crate::transaction::Transaction;
@@ -34,8 +34,8 @@ impl Interface {
         // TODO: Handle action message types
         match self.channel.try_recv() {
             Some(s) => match s {
-                SwitchCommand::UserAction(t) => Some(t),
-                SwitchCommand::SwitchAction(a) => {
+                Command::User(t) => Some(t),
+                Command::Switch(a) => {
                     log::info!("special switch action received: {:?}", a);
                     None
                 }
@@ -48,8 +48,8 @@ impl Interface {
         // TODO: Handle action message types
         match self.channel.recv() {
             Some(s) => match s {
-                SwitchCommand::UserAction(t) => Some(t),
-                SwitchCommand::SwitchAction(a) => {
+                Command::User(t) => Some(t),
+                Command::Switch(a) => {
                     log::info!("special switch action received: {:?}", a);
                     None
                 }
@@ -60,7 +60,7 @@ impl Interface {
 
     pub fn send(&self, m: Message) -> Result<(), Error> {
         let transaction = Transaction::new(m);
-        self.channel.send(SwitchCommand::UserAction(transaction))?;
+        self.channel.send(Command::User(transaction))?;
         Ok(())
     }
 
@@ -70,7 +70,7 @@ impl Interface {
         let remote = Topic::new(address.clone(), c2);
         match self
             .channel
-            .send(SwitchCommand::SwitchAction(SwitchAction::Subscribe(remote)))
+            .send(Command::Switch(SwitchAction::Subscribe(remote)))
         {
             Ok(()) => {
                 let message = Message::new(
@@ -81,7 +81,7 @@ impl Interface {
                 );
                 let transaction = Transaction::new(message);
 
-                let e = self.channel.send(SwitchCommand::UserAction(transaction));
+                let e = self.channel.send(Command::User(transaction));
                 if e.is_err() {
                     log::error!("handler thread failed: {:?}", e);
                     // TODO: Add restart function.
@@ -101,9 +101,7 @@ impl Interface {
     }
 
     pub fn terminate(&self) {
-        let e = self
-            .channel
-            .send(SwitchCommand::SwitchAction(SwitchAction::Terminate));
+        let e = self.channel.send(Command::Switch(SwitchAction::Terminate));
         if e.is_err() {
             log::error!("error terminating thread: {:?}", e);
         }

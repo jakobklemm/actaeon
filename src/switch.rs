@@ -9,10 +9,11 @@
 use crate::error::Error;
 use crate::interface::Interface;
 use crate::message::Message;
+use crate::node::Address;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
-use crate::topic::{HandlerTopic, Topic, TopicTable};
+use crate::topic::{HandlerTopic, Topic};
 use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -24,13 +25,16 @@ use std::thread;
 /// is either a UserAction or a SwitchAction, only UserAction get
 /// actually passed onto the user, others are internal types for
 /// managing the thread and the channel.
-pub enum SwitchCommand {
+pub enum Command {
     /// mpsc element for internal communication, like shutting down
     /// the thread or any issues.
-    SwitchAction(SwitchAction),
+    Switch(SwitchAction),
     /// Messages coming from the network intended for the user (or the
     /// other way around).
-    UserAction(Transaction),
+    User(Transaction),
+    /// Internal messages with incomplete data, that will be completed
+    /// on the Handler Thread.
+    System(SystemAction),
 }
 
 /// A collection of possible events for the channel. These are not
@@ -53,6 +57,11 @@ pub enum SwitchAction {
     Subscribe(Topic),
     /// Unsubscribe
     Unsubscribe,
+}
+
+pub enum SystemAction {
+    Subscribe(Address),
+    Unsubscribe(Address),
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -106,8 +115,8 @@ struct Cache {
 /// TODO: Handle crash / restart cases.
 #[derive(Debug)]
 pub struct Channel {
-    sender: Sender<SwitchCommand>,
-    receiver: Receiver<SwitchCommand>,
+    sender: Sender<Command>,
+    receiver: Receiver<Command>,
 }
 
 impl Channel {
@@ -131,7 +140,7 @@ impl Channel {
     /// Sends a message through the Channel. This can fail if the
     /// remote socket is unavailable. Currently this error case is not
     /// handled.
-    pub fn send(&self, command: SwitchCommand) -> Result<(), Error> {
+    pub fn send(&self, command: Command) -> Result<(), Error> {
         match self.sender.send(command) {
             Ok(()) => Ok(()),
             Err(_) => Err(Error::Connection(String::from("channel is not available"))),
@@ -141,7 +150,7 @@ impl Channel {
     /// Like send this is also a wrapper around the mpsc try_recv
     /// method. Currently error are not getting handled and if the
     /// socket is unavailable None will be returned.
-    pub fn try_recv(&self) -> Option<SwitchCommand> {
+    pub fn try_recv(&self) -> Option<Command> {
         match self.receiver.try_recv() {
             Ok(m) => Some(m),
             Err(_) => None,
@@ -151,7 +160,7 @@ impl Channel {
     /// Like send this is also a wrapper around the mpsc recv method.
     /// Currently error are not getting handled and if the socket is
     /// unavailable None will be returned.
-    pub fn recv(&self) -> Option<SwitchCommand> {
+    pub fn recv(&self) -> Option<Command> {
         match self.receiver.recv() {
             Ok(m) => Some(m),
             Err(_) => None,
@@ -188,7 +197,7 @@ impl Switch {
                         self.cache.add(t.clone());
                         match self.topics.borrow().get(&t.source()) {
                             Some(topic) => {
-                                if topic.channel.send(SwitchCommand::UserAction(t)).is_err() {
+                                if topic.channel.send(Command::User(t)).is_err() {
                                     // TODO: Restart calls.
                                     log::error!("Switch mpsc message could not be sent");
                                 }
@@ -208,7 +217,7 @@ impl Switch {
             match self.channel.try_recv() {
                 Some(data) => {
                     match data {
-                        SwitchCommand::UserAction(t) => {
+                        Command::User(t) => {
                             log::info!("sending new message");
                             log::trace!("transaction: {:?}", t);
                             // TODO: number of targets
@@ -223,7 +232,7 @@ impl Switch {
                                 }
                             }
                         }
-                        SwitchCommand::SwitchAction(action) => match action {
+                        Command::Switch(action) => match action {
                             SwitchAction::Terminate => {
                                 log::info!("terminating handler thread");
                                 break;
@@ -245,7 +254,7 @@ impl Switch {
                                 );
                                 let transaction = Transaction::new(message);
 
-                                let e = self.channel.send(SwitchCommand::UserAction(transaction));
+                                let e = self.channel.send(Command::User(transaction));
                                 if e.is_err() {
                                     log::error!("handler thread failed: {:?}", e);
                                 }
@@ -263,7 +272,7 @@ impl Switch {
                 match topic.channel.try_recv() {
                     Some(data) => {
                         match data {
-                            SwitchCommand::UserAction(t) => {
+                            Command::User(t) => {
                                 log::info!("sending new message");
                                 log::trace!("transaction: {:?}", t);
                                 // TODO: number of targets
@@ -278,7 +287,7 @@ impl Switch {
                                     }
                                 }
                             }
-                            SwitchCommand::SwitchAction(action) => match action {
+                            Command::Switch(action) => match action {
                                 SwitchAction::Terminate => {
                                     log::info!("terminating handler thread");
                                     break;
