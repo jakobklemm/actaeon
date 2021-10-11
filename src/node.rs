@@ -110,12 +110,22 @@ impl Node {
             link,
         }
     }
+
     /// Returns the link status of a node. Should no link be available
     /// it is treated as if the node is unavailable.
     pub fn is_reachable(&self) -> bool {
         match &self.link {
             Some(link) => link.reachable,
             None => false,
+        }
+    }
+
+    /// Update the link status of a node even if there is no link
+    /// available.
+    pub fn update(&mut self, value: bool) {
+        match &mut self.link {
+            Some(link) => link.update(value),
+            None => {}
         }
     }
 }

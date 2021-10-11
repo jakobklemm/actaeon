@@ -5,7 +5,7 @@ use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
 use crate::switch::Channel;
-use crate::switch::{Command, SwitchAction};
+use crate::switch::{Command, SwitchAction, SystemAction};
 use crate::topic::Topic;
 use crate::transaction::Class;
 use crate::transaction::Transaction;
@@ -39,6 +39,10 @@ impl Interface {
                     log::info!("special switch action received: {:?}", a);
                     None
                 }
+                Command::System(_) => {
+                    log::warn!("unknown action received");
+                    None
+                }
             },
             None => None,
         }
@@ -51,6 +55,10 @@ impl Interface {
                 Command::User(t) => Some(t),
                 Command::Switch(a) => {
                     log::info!("special switch action received: {:?}", a);
+                    None
+                }
+                Command::System(_) => {
+                    log::warn!("unknown action received");
                     None
                 }
             },
@@ -66,11 +74,11 @@ impl Interface {
 
     pub fn subscribe(&self, address: Address) -> Result<Topic, Error> {
         let (c1, c2) = Channel::new();
-        let local = Topic::new(address.clone(), c1);
-        let remote = Topic::new(address.clone(), c2);
+        let local = Topic::new(address.clone(), c1, Vec::new());
+        let remote = Topic::new(address.clone(), c2, Vec::new());
         match self
             .channel
-            .send(Command::Switch(SwitchAction::Subscribe(remote)))
+            .send(Command::System(SystemAction::Subscribe(remote.address())))
         {
             Ok(()) => {
                 let message = Message::new(

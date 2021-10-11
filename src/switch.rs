@@ -13,7 +13,7 @@ use crate::node::Address;
 use crate::node::Center;
 use crate::router::Table;
 use crate::tcp::Handler;
-use crate::topic::{HandlerTopic, Topic};
+use crate::topic::TopicBucket;
 use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -53,15 +53,12 @@ pub enum SwitchAction {
     /// informed. If it gets sent by the user the cache in the thread
     /// will be cleared.
     Cache,
-    /// Add a new entry to the TopicTable
-    Subscribe(Topic),
-    /// Unsubscribe
-    Unsubscribe,
 }
 
 pub enum SystemAction {
     Subscribe(Address),
     Unsubscribe(Address),
+    Send(Address, Vec<u8>),
 }
 
 /// Currently the system requires a dedicated thread for the listening
@@ -88,7 +85,9 @@ pub struct Switch {
     /// Holds a list of all currently active topics. The data is in a
     /// RefCell in order to make interactions in the Thread closure
     /// easier.
-    topics: RefCell<TopicTable>,
+    topics: RefCell<TopicBucket>,
+    /// Another copy of the Center data used for generating messages.
+    center: Center,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -180,7 +179,8 @@ impl Switch {
             cache,
             handler: Arc::new(Mutex::new(handler)),
             table: Table::new(limit, center.clone()),
-            topics: RefCell::new(TopicTable::new()),
+            topics: RefCell::new(TopicBucket::new()),
+            center: center.clone(),
         };
         let interface = Interface::new(c2, center);
         Ok((switch, interface))
@@ -195,7 +195,7 @@ impl Switch {
                         log::info!("received new TCP message");
                         log::trace!("new transaction: {:?}", t);
                         self.cache.add(t.clone());
-                        match self.topics.borrow().get(&t.source()) {
+                        match self.topics.borrow().find(&t.source()) {
                             Some(topic) => {
                                 if topic.channel.send(Command::User(t)).is_err() {
                                     // TODO: Restart calls.
@@ -241,26 +241,36 @@ impl Switch {
                                 log::info!("emptied the handler cache");
                                 self.cache.empty();
                             }
-                            SwitchAction::Subscribe(t) => {
-                                log::info!("subscribed to new topic: {:?}", t.address());
-                                let target = t.address();
-                                let ht = HandlerTopic::convert(t);
-                                self.topics.borrow_mut().add(ht);
+                        },
+                        Command::System(action) => match action {
+                            SystemAction::Subscribe(_) => {
+                                log::warn!("unable to process event without topic");
+                            }
+                            SystemAction::Unsubscribe(_) => {
+                                log::warn!("unable to process event without topic");
+                            }
+                            SystemAction::Send(address, body) => {
                                 let message = Message::new(
-                                    Class::Subscribe,
-                                    self.table.center().clone(),
-                                    target,
-                                    Vec::new(),
+                                    Class::Action,
+                                    self.center.public.clone(),
+                                    address.clone(),
+                                    body,
                                 );
                                 let transaction = Transaction::new(message);
-
-                                let e = self.channel.send(Command::User(transaction));
-                                if e.is_err() {
-                                    log::error!("handler thread failed: {:?}", e);
+                                let targets = self.table.get(&address, 3);
+                                for node in targets {
+                                    let e = self
+                                        .handler
+                                        .lock()
+                                        .unwrap()
+                                        .send(transaction.to_wire(), node);
+                                    if e.is_err() {
+                                        log::error!("unable to connect to node");
+                                        // TODO: Update table and
+                                        // deactivate the node,
+                                        // reschedule for reattemtp.
+                                    }
                                 }
-                            }
-                            SwitchAction::Unsubscribe => {
-                                log::warn!("unable to unsubscribe from unknown topic");
                             }
                         },
                     }
@@ -268,6 +278,7 @@ impl Switch {
                 None => {}
             }
 
+            // topic messages
             for topic in &self.topics.borrow().topics {
                 match topic.channel.try_recv() {
                     Some(data) => {
@@ -296,13 +307,35 @@ impl Switch {
                                     log::info!("emptied the handler cache");
                                     self.cache.empty();
                                 }
-                                SwitchAction::Subscribe(t) => {
-                                    log::info!("subscribed to new topic: {:?}", t.address());
+                            },
+                            Command::System(action) => match action {
+                                SystemAction::Subscribe(address) => {
+                                    log::warn!("unable to process event without topic");
                                 }
-                                SwitchAction::Unsubscribe => {
-                                    let e = self.topics.borrow_mut().remove(&topic.address);
-                                    if e.is_err() {
-                                        log::error!("unable to unsubscribe from unknown topic");
+                                SystemAction::Unsubscribe(address) => {
+                                    log::warn!("unable to process event without topic");
+                                }
+                                SystemAction::Send(address, body) => {
+                                    let message = Message::new(
+                                        Class::Action,
+                                        self.center.public,
+                                        address,
+                                        body,
+                                    );
+                                    let transaction = Transaction::new(message);
+                                    let targets = self.table.get(&address, 3);
+                                    for node in targets {
+                                        let e = self
+                                            .handler
+                                            .lock()
+                                            .unwrap()
+                                            .send(transaction.to_wire(), node);
+                                        if e.is_err() {
+                                            log::error!("unable to connect to node");
+                                            // TODO: Update table and
+                                            // deactivate the node,
+                                            // reschedule for reattemtp.
+                                        }
                                     }
                                 }
                             },
@@ -391,7 +424,7 @@ mod tests {
         let (c1, c2) = Channel::new();
         let t = transaction();
         let h = std::thread::spawn(move || {
-            let _ = c1.send(SwitchCommand::UserAction(t));
+            let _ = c1.send(Command::User(t));
         });
         h.join().unwrap();
         let m = c2.recv();

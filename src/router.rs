@@ -159,6 +159,18 @@ impl Table {
         self.root.capacity()
     }
 
+    /// Change the link state of a Node in the Table. This function
+    /// can both be used to change the state of the link and also to
+    /// update the state after no change was found. This will update
+    /// the internal counter for how many times attempts have been
+    /// made to reach a Node.
+    pub fn status(&mut self, address: &Address, status: bool) {
+        match self.find(address) {
+            Some(node) => node.update(status),
+            None => (),
+        }
+    }
+
     /// Returns the total number of Nodes in the entire Table.
     pub fn len(&self) -> usize {
         self.root.len()

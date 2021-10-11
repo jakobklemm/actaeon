@@ -65,12 +65,6 @@ impl Database {
 
         return raw;
     }
-
-    pub fn convert(bytes: Vec<Vec<u8>>) -> Vec<DataTopic> {
-        let mut topics = Vec::new();
-        for i in bytes {}
-        return topics;
-    }
 }
 
 impl DataTopic {
@@ -116,11 +110,11 @@ impl DataTopic {
         if subs.len() % 32 != 0 {
             return Err(Error::Invalid(String::from("data is invalid")));
         }
-        let mut subscribers = subs.chunks_exact(32);
+        let subscribers = subs.chunks_exact(32);
         let mut composed: Vec<Address> = Vec::new();
-        for i in subscribers {
+        for _ in subscribers {
             let mut bts: [u8; 32] = [0; 32];
-            for (i, j) in bts.iter().enumerate() {
+            for (i, j) in bts.clone().iter().enumerate() {
                 bts[i] = *j;
             }
             let addr = Address::from_bytes(bts)?;
@@ -157,41 +151,6 @@ impl DataTopic {
 mod test {
     use super::*;
     use crate::node::Address;
-
-    #[test]
-    fn test_convert_one() {
-        let addr = Address::generate("topic").unwrap();
-        let mut t = DataTopic::new(addr);
-        let n = Address::generate("node").unwrap();
-        t.subscribe(n);
-        let b = t.as_bytes();
-        let c = Database::convert(b);
-        assert_eq!(c.first().unwrap().len(), 74);
-    }
-
-    #[test]
-    fn test_convert_multi() {
-        let mut data = Vec::new();
-        let addr = Address::generate("topic").unwrap();
-        let mut t = DataTopic::new(addr);
-        let n = Address::generate("node").unwrap();
-        t.subscribe(n);
-        let b = t.as_bytes();
-        data.append(&mut b.to_vec());
-        let addr = Address::generate("topic").unwrap();
-        let mut t = DataTopic::new(addr);
-        let n = Address::generate("node").unwrap();
-        t.subscribe(n);
-        let n = Address::generate("another").unwrap();
-        t.subscribe(n);
-        let b = t.as_bytes();
-        data.append(&mut b.to_vec());
-
-        let c = Database::convert(data);
-        assert_eq!(c.first().unwrap().len(), 74);
-        assert_eq!(c.last().unwrap().len(), 106);
-        assert_eq!(c.len(), 2);
-    }
 
     #[test]
     fn test_datatopic_length_update() {

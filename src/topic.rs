@@ -8,10 +8,9 @@
 //! user.
 
 use crate::error::Error;
-use crate::message::Message;
-use crate::node::{Address, Center};
-use crate::switch::{Channel, Command, SwitchAction, SystemAction};
-use crate::transaction::{Class, Transaction};
+use crate::node::Address;
+use crate::switch::{Channel, Command, SystemAction};
+use crate::transaction::Transaction;
 use std::ops::Deref;
 
 /// The main structure for representing Topics in the system. It will
@@ -53,7 +52,7 @@ pub struct HandlerTopic {
 /// implement the same methodhs.
 #[derive(Debug)]
 pub struct TopicBucket {
-    topics: Vec<HandlerTopic>,
+    pub topics: Vec<HandlerTopic>,
 }
 
 #[derive(Debug)]
@@ -87,34 +86,37 @@ impl Topic {
         }
     }
 
-    pub fn recv(&mut self) -> Option<Message> {
-        match self.channel.recv() {
-            Some(m) => match m {
-                Command::User(t) => {
-                    return Some(t.message);
-                }
-                Command::System(action) => match action {
-                    SystemAction::Subscribe(a) => {
-                        self.subscribers.add(a);
-                        return None;
+    pub fn recv(&mut self) -> Option<Transaction> {
+        loop {
+            match self.channel.recv() {
+                Some(m) => match m {
+                    Command::User(t) => {
+                        return Some(t);
                     }
-                    SystemAction::Unsubscribe(a) => {
-                        let _ = self.subscribers.remove(&a);
-                        return None;
+                    Command::System(action) => match action {
+                        SystemAction::Subscribe(a) => {
+                            self.subscribers.add(a);
+                        }
+                        SystemAction::Unsubscribe(a) => {
+                            let _ = self.subscribers.remove(&a);
+                        }
+                        SystemAction::Send(_, _) => {
+                            log::warn!("unable to process received message type.");
+                        }
+                    },
+                    _ => {
+                        continue;
                     }
                 },
-                _ => {
+                None => {
                     return None;
                 }
-            },
-            None => {
-                return None;
             }
         }
     }
 
     /// Sends a message to all subscribed Addresses.
-    pub fn broadcast(&mut self, t: Transaction) -> Result<(), Error> {
+    pub fn broadcast(&mut self, body: Vec<u8>) -> Result<(), Error> {
         loop {
             match self.channel.try_recv() {
                 Some(m) => match m {
@@ -130,7 +132,16 @@ impl Topic {
                 }
             }
         }
-        self.channel.send(Command::User(t))
+
+        for sub in &self.subscribers.subscribers {
+            // TODO! Ownership issues, reduce clone calls.
+            let action = Command::System(SystemAction::Send(sub.clone(), body));
+            let e = self.channel.send(action);
+            if e.is_err() {
+                log::error!("channel is unavailable, it is possible the thread crashed.")
+            }
+        }
+        return Ok(());
     }
 
     /// Shorthand function to get the Address of a Topic.
@@ -147,7 +158,7 @@ impl Deref for Topic {
     fn deref(&self) -> &Self::Target {
         let e = self
             .channel
-            .send(Command::Switch(SwitchAction::Unsubscribe));
+            .send(Command::System(SystemAction::Unsubscribe(self.address)));
         if e.is_err() {
             // this might not work since the Topic will be derefed on
             // both ends.
@@ -196,6 +207,14 @@ impl SubscriberBucket {
 
     pub fn len(&self) -> usize {
         self.subscribers.len()
+    }
+}
+
+impl Iterator for SubscriberBucket {
+    type Item = Address;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.subscribers.pop()
     }
 }
 
