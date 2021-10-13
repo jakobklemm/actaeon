@@ -10,11 +10,16 @@ use crate::transaction::Wire;
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 
+/// Represents the TCP listener and exposes certain functions to
+/// interact with the outside world. They are mostly just wrappers
+/// around the underlying TCP modules.
 pub struct Handler {
     listener: TcpListener,
 }
 
 impl Handler {
+    /// Spaws a new TCP listener based on the link details of the
+    /// center.
     pub fn new(center: Center) -> Result<Self, Error> {
         let listener = TcpListener::bind(center.link.to_string())?;
         listener.set_nonblocking(true)?;
@@ -41,9 +46,10 @@ impl Handler {
         }
     }
 
-    pub fn send(&self, data: Wire, node: &Node) -> Result<(), Error> {
+    pub fn send(&self, data: Wire, node: Node) -> Result<(), Error> {
         if node.link.is_none() {
-            Err(Error::Invalid(String::from("no link data found")))
+            // TODO: Add to node link refetch
+            return Err(Error::Invalid(String::from("no link data found")));
         } else {
             let mut stream = TcpStream::connect(node.link.as_ref().unwrap().to_string())?;
             stream.write(&data.as_bytes())?;
@@ -60,7 +66,7 @@ mod tests {
     #[test]
     fn test_create_handler() {
         let (_, s) = box_::gen_keypair();
-        let center = Center::new(s, String::from("127.0.0.1"), 42424);
+        let center = Center::new(s, String::from("127.0.0.1"), 42434);
         let h = Handler::new(center).unwrap();
         assert_eq!(
             h.listener.local_addr().unwrap().ip().to_string(),

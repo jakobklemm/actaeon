@@ -24,7 +24,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct Transaction {
     /// Unique ID to avoid duplicate processing.
-    uuid: Uuid,
+    pub uuid: Uuid,
     /// The time a message was received and processed, useful if
     /// non-blocking try_read/0 is used and outdated messages need to
     /// be disregarded.
@@ -48,7 +48,7 @@ pub struct Transaction {
 /// Minimum data size: 108 bytes (+ body).
 #[derive(Debug)]
 pub struct Wire {
-    uuid: [u8; 16],
+    pub uuid: [u8; 16],
     class: [u8; 4],
     source: [u8; 32],
     target: [u8; 32],

@@ -3,6 +3,8 @@
 Distributed PubSub and messaging protocol for decentralized real time
 applications.
 
+TOOD: Test performance of both TCP and UPD, fully switch to the faster
+except for constant connections.
 * Goals
 - To provide a simple, easy to use library for general purpose
   decentralized networking.
@@ -28,12 +30,12 @@ modular system has to be implemented.
 - Handler Thread: On the handler thread Connections can get
   periodically processed when needed. 
 * Terminology
-| Term                      | Explanation                                                |
-|---------------------------+------------------------------------------------------------|
-| Adapter                   | External interface                                         |
-| Passive Message           | Message not for this node, handled by the Kademlia system. |
-| Active Message            | Message for this and and for the user.                     |
-| Automatic Message         | Message for this node but handled internally.              |
-| Actaeon process / process | Dedicated thread for receiving messages.                   |
-| Center                    | Self / this, local node.                                   |
+| Term                     | Explanation                                                |
+|--------------------------+------------------------------------------------------------|
+| Adapter                  | External interface                                         |
+| Passive Message          | Message not for this node, handled by the Kademlia system. |
+| Active Message           | Message for this and and for the user.                     |
+| Automatic Message        | Message for this node but handled internally.              |
+| Handler thread / process | Dedicated thread for receiving messages.                   |
+| Center                   | Self / this, local node.                                   |
 

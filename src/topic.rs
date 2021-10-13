@@ -11,7 +11,6 @@ use crate::error::Error;
 use crate::node::Address;
 use crate::switch::{Channel, Command, SystemAction};
 use crate::transaction::Transaction;
-use std::ops::Deref;
 
 /// The main structure for representing Topics in the system. It will
 /// be the main interaction point for the user. Each Topic the user
@@ -46,29 +45,20 @@ pub struct HandlerTopic {
     pub channel: Channel,
 }
 
+/// Wrapper structure to enable faster operations on all stored
+/// subscribers of a Topic.
+#[derive(Debug)]
+pub struct SubscriberBucket {
+    subscribers: Vec<Address>,
+}
+
 /// A simple structure to store a collection of Topics. Since the
 /// normal Topics use a custom implementation of Deref the thread has
 /// to use a different structure, which is identically but doesn't
 /// implement the same methodhs.
 #[derive(Debug)]
 pub struct TopicBucket {
-    pub topics: Vec<HandlerTopic>,
-}
-
-#[derive(Debug)]
-struct SubscriberBucket {
-    subscribers: Vec<Address>,
-}
-
-impl HandlerTopic {
-    /// Takes in a topic and returns a HandlerTopic. Since the two
-    /// have identical fields no real conversion is required.
-    pub fn convert(topic: Topic) -> Self {
-        Self {
-            address: topic.address,
-            channel: topic.channel,
-        }
-    }
+    pub topics: Vec<Topic>,
 }
 
 impl Topic {
@@ -135,7 +125,7 @@ impl Topic {
 
         for sub in &self.subscribers.subscribers {
             // TODO! Ownership issues, reduce clone calls.
-            let action = Command::System(SystemAction::Send(sub.clone(), body));
+            let action = Command::System(SystemAction::Send(sub.clone(), body.clone()));
             let e = self.channel.send(action);
             if e.is_err() {
                 log::error!("channel is unavailable, it is possible the thread crashed.")
@@ -147,24 +137,6 @@ impl Topic {
     /// Shorthand function to get the Address of a Topic.
     pub fn address(&self) -> Address {
         self.address.clone()
-    }
-}
-
-impl Deref for Topic {
-    type Target = Address;
-
-    /// Should a Topic held by the user go out of scope it also needs
-    /// to be deleted in the Handler thread.
-    fn deref(&self) -> &Self::Target {
-        let e = self
-            .channel
-            .send(Command::System(SystemAction::Unsubscribe(self.address)));
-        if e.is_err() {
-            // this might not work since the Topic will be derefed on
-            // both ends.
-            log::error!("channel no longer available");
-        }
-        &self.address
     }
 }
 
@@ -223,13 +195,13 @@ impl TopicBucket {
         Self { topics: Vec::new() }
     }
 
-    pub fn add(&mut self, topic: HandlerTopic) {
+    pub fn add(&mut self, topic: Topic) {
         if self.find(&topic.address).is_none() {
             self.topics.push(topic)
         }
     }
 
-    pub fn find(&self, search: &Address) -> Option<&HandlerTopic> {
+    pub fn find(&self, search: &Address) -> Option<&Topic> {
         let index = self.topics.iter().position(|e| &e.address == search);
         match index {
             Some(i) => self.topics.get(i),
@@ -248,6 +220,13 @@ impl TopicBucket {
         }
     }
 
+    pub fn is_local(&self, query: &Address) -> bool {
+        match self.find(query) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.topics.len()
     }
@@ -255,41 +234,5 @@ impl TopicBucket {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::message::Message;
-    use crate::transaction::{Class, Transaction};
-
-    #[test]
-    fn test_topictable_get() {
-        let mut table = TopicBucket::new();
-        let t = gen_topic();
-        table.add(HandlerTopic::convert(t));
-        assert_eq!(table.len(), 1);
-    }
-
-    #[test]
-    fn test_topictable_remove() {
-        let mut table = TopicBucket::new();
-        let t = gen_topic();
-        let a = t.address.clone();
-        table.add(HandlerTopic::convert(t));
-        table.remove(&a).unwrap();
-        assert_eq!(table.len(), 0);
-    }
-
-    fn gen_topic() -> Topic {
-        let (channel, _) = Channel::new();
-        Topic::new(Address::generate("abc").unwrap(), channel, Vec::new())
-    }
-
-    fn transaction() -> Transaction {
-        let message = Message::new(
-            Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            "test".to_string().as_bytes().to_vec(),
-        );
-        let t = Transaction::new(message);
-        return t;
-    }
+    //use super::*;
 }

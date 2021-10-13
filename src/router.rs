@@ -139,6 +139,14 @@ impl Table {
         self.root.find(address, &self.center)
     }
 
+    /// Takes an Address and returns an optional Node if a Node with
+    /// exactly that Address exists. This is not meant as a way of
+    /// finding new targets for messages but for checking if a Node
+    /// exists in the Table or fetching specific connection data.
+    pub fn find_mut(&mut self, address: &Address) -> Option<&mut Node> {
+        self.root.find_mut(address, &self.center)
+    }
+
     /// Returns the closest nodes to the search address, no matter the
     /// shape of the binary tree. If there are less than the requested
     /// number of nodes in the tree only that amount will be returned,
@@ -149,6 +157,21 @@ impl Table {
     /// actual messages to the k-closest Nodes.
     pub fn get(&self, address: &Address, limit: usize) -> Vec<&Node> {
         self.root.get(address, &self.center, limit)
+    }
+
+    /// Mostly the same as get but copies the found nodes instead of
+    /// returning a pointer to them. Since the Node at some point will
+    /// have to be copied for the TCP handler, this function makes the
+    /// copy earlier.
+    pub fn get_copy(&self, address: &Address, limit: usize) -> Vec<Node> {
+        let mut nodes = Vec::new();
+        let refs = self.get(address, limit);
+
+        for n in refs {
+            nodes.push(n.clone());
+        }
+
+        return nodes;
     }
 
     /// Returns the current maximum capacity of the tree. The capacity
@@ -165,7 +188,7 @@ impl Table {
     /// the internal counter for how many times attempts have been
     /// made to reach a Node.
     pub fn status(&mut self, address: &Address, status: bool) {
-        match self.find(address) {
+        match self.root.find_mut(address, &self.center) {
             Some(node) => node.update(status),
             None => (),
         }
@@ -303,6 +326,18 @@ impl Element {
         }
     }
 
+    /// Returns a pointer to a Node if the provided Address exists in
+    /// the Table.
+    fn find_mut(&mut self, search: &Address, center: &Center) -> Option<&mut Node> {
+        if !self.in_range(search, center) {
+            return None;
+        }
+        match self {
+            Self::Split(s, _) => s.find_mut(search, center),
+            Self::Leaf(b, _) => b.find_mut(search),
+        }
+    }
+
     /// Gets upto the "limit" number of nodes closest to the target
     /// address. => bottom up recursion
     fn get(&self, target: &Address, center: &Center, limit: usize) -> Vec<&Node> {
@@ -378,6 +413,16 @@ impl Split {
             self.near.find(search, center)
         } else {
             self.far.find(search, center)
+        }
+    }
+
+    /// Recursive function that calls find on the correct side for the
+    /// Address.
+    fn find_mut(&mut self, search: &Address, center: &Center) -> Option<&mut Node> {
+        if self.near.in_range(search, center) {
+            self.near.find_mut(search, center)
+        } else {
+            self.far.find_mut(search, center)
         }
     }
 

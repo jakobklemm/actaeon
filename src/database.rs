@@ -15,6 +15,7 @@ pub struct Database {}
 /// dedicated length field, which makes reading it from the Database
 /// possible. This will be the kind of Topic representing the "local"
 /// topics, so some additional data is required.
+#[derive(Debug)]
 pub struct DataTopic {
     /// Same as the Topic Address, main identification of each Topic.
     address: Address,
@@ -42,14 +43,14 @@ impl Database {
     }
 
     pub fn split(bytes: Vec<u8>) -> Vec<Vec<u8>> {
-        if bytes.len() < 42 {
+        if bytes.len() < 34 {
             return Vec::new();
         }
         let mut raw: Vec<Vec<u8>> = Vec::new();
 
         let mut i = 0;
         loop {
-            if (i + 42) > bytes.len() {
+            if (i + 34) > bytes.len() {
                 break;
             }
 
@@ -74,7 +75,7 @@ impl DataTopic {
         Self {
             address,
             subscribers: Vec::new(),
-            length: [0, 36],
+            length: [0, 34],
         }
     }
 
@@ -103,7 +104,7 @@ impl DataTopic {
             } else if i >= 2 && i <= 33 {
                 address[i - 2] = *j;
             } else {
-                subs[i - 36] = *j;
+                subs[i - 34] = *j;
             }
         }
 
@@ -137,7 +138,7 @@ impl DataTopic {
     /// Computes the updated length for the DataTopic using the
     /// described method.
     fn update_length(&mut self) {
-        let mut base: usize = 42;
+        let mut base: usize = 34;
         for _ in 0..self.subscribers.len() {
             base += 32;
         }
@@ -156,21 +157,21 @@ mod test {
     fn test_datatopic_length_update() {
         let addr = Address::generate("topic").unwrap();
         let mut t = DataTopic::new(addr);
-        assert_eq!(t.length, [0, 42]);
+        assert_eq!(t.length, [0, 34]);
         t.subscribe(Address::generate("new").unwrap());
         t.update_length();
-        assert_eq!(t.length, [0, 74]);
+        assert_eq!(t.length, [0, 66]);
     }
 
     #[test]
     fn test_datatopic_length_update_wrap() {
         let addr = Address::generate("topic").unwrap();
         let mut t = DataTopic::new(addr);
-        assert_eq!(t.length, [0, 42]);
+        assert_eq!(t.length, [0, 34]);
         for i in 0..10 {
             t.subscribe(Address::generate(&i.to_string()).unwrap());
         }
-        assert_eq!(t.length, [1, 107]);
+        assert_eq!(t.length, [1, 99]);
     }
 
     #[test]
@@ -178,7 +179,7 @@ mod test {
         let addr = Address::generate("topic").unwrap();
         let t = DataTopic::new(addr);
         let b = t.as_bytes();
-        assert_eq!(b.len(), 42);
-        assert_eq!(b[1], 42);
+        assert_eq!(b.len(), 34);
+        assert_eq!(b[1], 34);
     }
 }

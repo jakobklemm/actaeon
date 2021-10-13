@@ -9,8 +9,7 @@
 use crate::error::Error;
 use crate::interface::Interface;
 use crate::message::Message;
-use crate::node::Address;
-use crate::node::Center;
+use crate::node::{Address, Center, Node};
 use crate::router::Table;
 use crate::tcp::Handler;
 use crate::topic::TopicBucket;
@@ -81,7 +80,7 @@ pub struct Switch {
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
-    table: Table,
+    table: RefCell<Table>,
     /// Holds a list of all currently active topics. The data is in a
     /// RefCell in order to make interactions in the Thread closure
     /// easier.
@@ -178,7 +177,7 @@ impl Switch {
             channel: c1,
             cache,
             handler: Arc::new(Mutex::new(handler)),
-            table: Table::new(limit, center.clone()),
+            table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new()),
             center: center.clone(),
         };
@@ -190,26 +189,67 @@ impl Switch {
         thread::spawn(move || loop {
             // tcp messages
             match self.handler.lock().unwrap().read() {
-                Some(wire) => match wire.convert() {
-                    Ok(t) => {
-                        log::info!("received new TCP message");
-                        log::trace!("new transaction: {:?}", t);
-                        self.cache.add(t.clone());
-                        match self.topics.borrow().find(&t.source()) {
-                            Some(topic) => {
-                                if topic.channel.send(Command::User(t)).is_err() {
-                                    // TODO: Restart calls.
-                                    log::error!("Switch mpsc message could not be sent");
+                Some(wire) => {
+                    if !self.cache.exists(wire.uuid) {
+                        match wire.convert() {
+                            Ok(t) => {
+                                log::info!("received new TCP message");
+                                log::trace!("new transaction: {:?}", t);
+                                let target = t.target();
+                                if self.topics.borrow().is_local(&target) {
+                                    self.cache.add(t.clone());
+                                    match self.topics.borrow().find(&target) {
+                                        Some(topic) => {
+                                            if topic.channel.send(Command::User(t)).is_err() {
+                                                // If the topic channel is offline, it can be
+                                                // assumed the topic in user space
+                                                // has been derefed and can be
+                                                // disregarded.
+                                                let e = self.topics.borrow_mut().remove(&target);
+                                                if e.is_err() {
+                                                    log::error!(
+                                                        "unknown internal system error: {:?}",
+                                                        e
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                } else {
+                                    let source = t.source();
+                                    match self.table.borrow().find(&source) {
+                                        Some(_) => {}
+                                        None => {
+                                            let node = Node::new(source, None);
+                                            self.table.borrow_mut().add(node);
+                                        }
+                                    }
+                                    // Kademlia
+                                    let targets = self.table.borrow().get_copy(&target, 3);
+                                    for node in targets {
+                                        let target = node.address.clone();
+                                        // TODO: Second messaging type
+                                        // / send function for owned
+                                        // valus.
+                                        let e =
+                                            self.handler.lock().unwrap().send(t.to_wire(), node);
+                                        if e.is_err() {
+                                            log::error!("handler thread sending error: {:?}", e);
+                                            self.table.borrow_mut().status(&target, false);
+                                        } else {
+                                            self.table.borrow_mut().status(&target, true);
+                                        }
+                                    }
                                 }
                             }
-                            None => {
-                                // TODO: Handle Kademlia
-                                log::error!("unknown topic");
-                            }
+                            Err(_) => {}
                         }
+                    } else {
+                        // if the message exists in the cache it can
+                        // be disregarded.
                     }
-                    Err(_) => {}
-                },
+                }
                 None => {}
             }
 
@@ -221,12 +261,12 @@ impl Switch {
                             log::info!("sending new message");
                             log::trace!("transaction: {:?}", t);
                             // TODO: number of targets
-                            let targets = self.table.get(&t.target(), 5);
+                            let targets = self.table.borrow().get_copy(&t.target(), 5);
                             log::trace!("found following targets: {:?}", targets);
                             // on tcp fail update the RT (and fail the sending?)
-                            for i in targets {
+                            for node in targets {
                                 // TODO: handle errors
-                                let e = self.handler.lock().unwrap().send(t.to_wire(), i);
+                                let e = self.handler.lock().unwrap().send(t.to_wire(), node);
                                 if e.is_err() {
                                     log::error!("tcp handler failed: {:?}", e);
                                 }
@@ -252,12 +292,12 @@ impl Switch {
                             SystemAction::Send(address, body) => {
                                 let message = Message::new(
                                     Class::Action,
-                                    self.center.public.clone(),
+                                    self.center.clone().public,
                                     address.clone(),
                                     body,
                                 );
                                 let transaction = Transaction::new(message);
-                                let targets = self.table.get(&address, 3);
+                                let targets = self.table.borrow().get_copy(&address, 3);
                                 for node in targets {
                                     let e = self
                                         .handler
@@ -269,6 +309,9 @@ impl Switch {
                                         // TODO: Update table and
                                         // deactivate the node,
                                         // reschedule for reattemtp.
+                                        self.table.borrow_mut().status(&address, false);
+                                    } else {
+                                        self.table.borrow_mut().status(&address, true);
                                     }
                                 }
                             }
@@ -287,12 +330,12 @@ impl Switch {
                                 log::info!("sending new message");
                                 log::trace!("transaction: {:?}", t);
                                 // TODO: number of targets
-                                let targets = self.table.get(&t.target(), 5);
+                                let targets = self.table.borrow().get_copy(&t.target(), 5);
                                 log::trace!("found following targets: {:?}", targets);
                                 // on tcp fail update the RT (and fail the sending?)
-                                for i in targets {
+                                for node in targets {
                                     // TODO: handle errors
-                                    let e = self.handler.lock().unwrap().send(t.to_wire(), i);
+                                    let e = self.handler.lock().unwrap().send(t.to_wire(), node);
                                     if e.is_err() {
                                         log::error!("tcp handler failed: {:?}", e);
                                     }
@@ -309,21 +352,21 @@ impl Switch {
                                 }
                             },
                             Command::System(action) => match action {
-                                SystemAction::Subscribe(address) => {
+                                SystemAction::Subscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
-                                SystemAction::Unsubscribe(address) => {
+                                SystemAction::Unsubscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
                                 SystemAction::Send(address, body) => {
                                     let message = Message::new(
                                         Class::Action,
-                                        self.center.public,
-                                        address,
+                                        self.center.public.clone(),
+                                        address.clone(),
                                         body,
                                     );
                                     let transaction = Transaction::new(message);
-                                    let targets = self.table.get(&address, 3);
+                                    let targets = self.table.borrow().get_copy(&address, 3);
                                     for node in targets {
                                         let e = self
                                             .handler
@@ -379,6 +422,28 @@ impl Cache {
     /// Clears the cache.
     fn empty(&mut self) {
         self.elements = Vec::new();
+    }
+
+    /// Checks if a transaction is already in the cache.
+    fn exists(&self, id: [u8; 16]) -> bool {
+        match self.find(id) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Returns a pointer to a transaction should the same uuid be
+    /// stored in the cache. In the future the entire cache could get
+    /// restructured to only keep track of uuids.
+    fn find(&self, id: [u8; 16]) -> Option<&Transaction> {
+        let index = self
+            .elements
+            .iter()
+            .position(|t| t.uuid == uuid::Uuid::from_bytes(id));
+        match index {
+            Some(i) => self.elements.get(i),
+            None => None,
+        }
     }
 }
 

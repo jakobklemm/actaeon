@@ -129,6 +129,17 @@ impl Bucket {
         }
     }
 
+    /// With a provided address it will return a pointer to the node
+    /// matching that address. This is for exact matches, not for
+    /// getting targets. It will only every return one optional node.
+    pub fn find_mut(&mut self, search: &Address) -> Option<&mut Node> {
+        let index = self.nodes.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => self.nodes.get_mut(i),
+            None => None,
+        }
+    }
+
     /// Returns upto "limit" number of nodes. It only return
     /// references to the nodes, since the nodes in the routing table
     /// are expected to live the longest.
