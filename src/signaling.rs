@@ -1,3 +1,5 @@
 //! # Signaling
 //!
-//! Responsible for Kademlia background tasks.
+//! Responsible for Kademlia background tasks and bootstrapping the Instance.
+
+

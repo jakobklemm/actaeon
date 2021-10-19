@@ -27,6 +27,19 @@ impl Handler {
         Ok(handler)
     }
 
+    /// The main (and only) way to read data from the socket. At this
+    /// point in the system there is no difference between try_read
+    /// and read, this read function is always non-blocking.
+    ///
+    /// The current TCP implementation is by no means the most
+    /// efficient way of handling the connections. For each Message
+    /// that is send a dedicated TCP connection is created, all the
+    /// bytes are sent and the connection is terminated.
+    ///
+    /// In the future this has to be improved in two ways: 1. Switch
+    /// to UDP over TCP for all simple Messages. 2. Keep a separate
+    /// list of active connections for common targets, that are likely
+    /// to be reused frequently.
     pub fn read(&mut self) -> Option<Wire> {
         match self.listener.accept() {
             Ok((mut socket, _addr)) => {
@@ -46,6 +59,15 @@ impl Handler {
         }
     }
 
+    /// Sends a Message to the given Node. There are a number of ways
+    /// this can fail, currently they are all handled together, this
+    /// has to be improved. Most obviously it can fail if there is no
+    /// Link data at all, or if the Node is unreachable (for any
+    /// number of reasons).
+    ///
+    /// There is also a need to improve memory usage, since the Link
+    /// details are cloned on conversion but the function takes
+    /// ownership of the entire Node object.
     pub fn send(&self, data: Wire, node: Node) -> Result<(), Error> {
         if node.link.is_none() {
             // TODO: Add to node link refetch
