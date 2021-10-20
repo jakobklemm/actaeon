@@ -9,7 +9,7 @@
 use crate::error::Error;
 use crate::interface::Interface;
 use crate::message::Message;
-use crate::node::{Address, Center, Node};
+use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
 use crate::tcp::Handler;
 use crate::topic::TopicBucket;
@@ -190,9 +190,16 @@ impl Switch {
                     if !self.cache.exists(wire.uuid) {
                         match wire.convert() {
                             Ok(t) => {
-                                log::info!("received new TCP message");
-                                log::trace!("new transaction: {:?}", t);
+                                log::info!("received new TCP message: {:?}", t);
                                 let target = t.target();
+                                let source = t.source();
+                                match self.table.borrow().find(&target) {
+                                    Some(_) => {}
+                                    None => {
+                                        let node = Node::new(target.clone(), None);
+                                        self.table.borrow_mut().add(node);
+                                    }
+                                }
                                 if self.topics.borrow().is_local(&target) {
                                     // Differentiate message classes.
                                     match t.class() {
@@ -216,8 +223,9 @@ impl Switch {
                                                     .send(transaction.to_wire(), node)
                                                     .is_err()
                                                 {
-                                                    // TODO: Deactivate & add to lookup queue.
+                                                    // TODO: Add to lookup queue.
                                                     log::warn!("unable to reach node");
+                                                    self.table.borrow_mut().status(&source, false);
                                                 }
                                             }
                                         }
@@ -226,6 +234,7 @@ impl Switch {
                                             log::info!("received Ping request reply: {}", t.uuid);
                                         }
                                         Class::Subscribe => {
+                                            log::info!("received subscribe request: {}", t.uuid);
                                             match self.topics.borrow_mut().find_mut(&target) {
                                                 Some(topic) => {
                                                     topic.subscribers.add(t.source());
@@ -240,6 +249,7 @@ impl Switch {
                                             }
                                         }
                                         Class::Unsubscribe => {
+                                            log::info!("received unsubscribe request: {}", t.uuid);
                                             match self.topics.borrow_mut().find_mut(&target) {
                                                 Some(topic) => {
                                                     topic.subscribers.remove(&t.source());
@@ -253,8 +263,59 @@ impl Switch {
                                                 None => {}
                                             }
                                         }
-                                        Class::Lookup => {}
-                                        Class::Details => {}
+                                        Class::Lookup => {
+                                            log::info!("received lookup request: {}", t.uuid,);
+                                            let message = Message::new(
+                                                Class::Details,
+                                                self.center.public.clone(),
+                                                target.clone(),
+                                                self.center.link.as_bytes(),
+                                            );
+                                            let transaction = Transaction::new(message);
+                                            let targets = self.table.borrow().get_copy(&target, 3);
+                                            for node in targets {
+                                                if self
+                                                    .handler
+                                                    .send(transaction.to_wire(), node)
+                                                    .is_err()
+                                                {
+                                                    // TODO: Deactivate & add to lookup queue.
+                                                    log::warn!("unable to reach node");
+                                                    self.table.borrow_mut().status(&source, false);
+                                                }
+                                            }
+                                        }
+                                        Class::Details => {
+                                            match self.table.borrow_mut().find_mut(&source) {
+                                                Some(node) => {
+                                                    let body = Link::from_bytes(
+                                                        t.message.body.clone().as_bytes(),
+                                                    );
+                                                    if body.is_err() {
+                                                        log::warn!(
+                                                            "received invalid details data: {:?}",
+                                                            t.message.body.clone().as_bytes()
+                                                        );
+                                                    } else {
+                                                        node.link = Some(body.unwrap());
+                                                    }
+                                                }
+                                                None => {
+                                                    let body = Link::from_bytes(
+                                                        t.message.body.clone().as_bytes(),
+                                                    );
+                                                    if body.is_err() {
+                                                        log::warn!("received invalid details data",);
+                                                    } else {
+                                                        let node = Node::new(
+                                                            source.clone(),
+                                                            Some(body.unwrap()),
+                                                        );
+                                                        self.table.borrow_mut().add(node);
+                                                    }
+                                                }
+                                            }
+                                        }
                                         Class::Action => {}
                                     }
                                     self.cache.add(t.clone());
