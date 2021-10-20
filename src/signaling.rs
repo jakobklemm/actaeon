@@ -13,7 +13,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct Signaling {
     servers: Vec<String>,
-    queue: ActionBucket,
+    pub queue: ActionBucket,
 }
 
 #[derive(Eq, PartialEq)]
@@ -36,11 +36,8 @@ pub enum Type {
 }
 
 impl Signaling {
-    pub fn new(servers: Vec<String>) -> Self {
-        Self {
-            servers,
-            queue: ActionBucket::new(),
-        }
+    pub fn new(servers: Vec<String>, queue: ActionBucket) -> Self {
+        Self { servers, queue }
     }
 
     pub fn start(self) {

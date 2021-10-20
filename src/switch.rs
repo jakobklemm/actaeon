@@ -12,6 +12,7 @@ use crate::interface::Interface;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
+use crate::signaling::ActionBucket;
 use crate::tcp::Handler;
 use crate::topic::TopicBucket;
 use crate::transaction::{Class, Transaction};
@@ -86,6 +87,8 @@ pub struct Switch {
     topics: RefCell<TopicBucket>,
     /// Another copy of the Center data used for generating messages.
     center: Center,
+    /// Queue of actions for the signaling thread.
+    queue: ActionBucket,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -171,6 +174,7 @@ impl Switch {
     pub fn new(center: Center, config: Config, limit: usize) -> Result<(Switch, Interface), Error> {
         let (c1, c2) = Channel::new();
         let cache = Cache::new(limit);
+        let queue = ActionBucket::new();
         let switch = Switch {
             channel: c1,
             cache: RefCell::new(cache),
@@ -178,8 +182,9 @@ impl Switch {
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
             center: center.clone(),
+            queue: queue.clone(),
         };
-        let interface = Interface::new(c2, config, center);
+        let interface = Interface::new(c2, config, center, queue);
         Ok((switch, interface))
     }
 

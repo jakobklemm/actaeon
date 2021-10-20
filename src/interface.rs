@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
-use crate::signaling::Signaling;
+use crate::signaling::{ActionBucket, Signaling};
 use crate::switch::Channel;
 use crate::switch::{Command, SwitchAction, SystemAction};
 use crate::topic::Topic;
@@ -29,11 +29,11 @@ impl Interface {
     /// Creates a new Interface. This function is currently one of the
     /// core components of starting up the system. In the future this
     /// might have to be wrapped by a start function.
-    pub fn new(channel: Channel, config: Config, center: Center) -> Self {
+    pub fn new(channel: Channel, config: Config, center: Center, queue: ActionBucket) -> Self {
         Self {
             channel,
             center,
-            signaling: Signaling::new(config.signaling),
+            signaling: Signaling::new(config.signaling, queue),
         }
     }
 
