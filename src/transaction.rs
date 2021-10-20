@@ -65,14 +65,18 @@ pub struct Wire {
 pub enum Class {
     /// Internal IsAlive check
     Ping,
+    /// Return of Ping
+    Pong,
     /// Internal NodeID lookup
     Lookup,
+    /// Return value for Lookup calls.
+    Details,
     /// Messages for the user
     Action,
     /// Subscribe to another topic
     Subscribe,
-    /// A new subscriber was added
-    Subscribed,
+    /// Opposite of Subscribe
+    Unsubscribe,
 }
 
 impl Transaction {
@@ -141,6 +145,11 @@ impl Transaction {
         self.message.source.clone()
     }
 
+    /// Returns the Class of the Message / Transaction.
+    pub fn class(&self) -> Class {
+        self.message.class.clone()
+    }
+
     /// This function returns the duration since the Transaction was
     /// created. While it should mostly be without problems, it can
     /// fail if the OS clock is unreliable.
@@ -178,10 +187,12 @@ impl Class {
     fn from_bytes(raw: [u8; 4]) -> Result<Self, Error> {
         match raw {
             [0, 0, 0, 1] => Ok(Self::Ping),
-            [0, 0, 0, 2] => Ok(Self::Lookup),
-            [0, 0, 0, 3] => Ok(Self::Action),
-            [0, 0, 0, 4] => Ok(Self::Subscribe),
-            [0, 0, 0, 5] => Ok(Self::Subscribed),
+            [0, 0, 0, 2] => Ok(Self::Pong),
+            [0, 0, 1, 0] => Ok(Self::Lookup),
+            [0, 0, 1, 1] => Ok(Self::Details),
+            [0, 1, 0, 0] => Ok(Self::Subscribe),
+            [0, 1, 0, 1] => Ok(Self::Unsubscribe),
+            [1, 0, 0, 0] => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -193,10 +204,12 @@ impl Class {
     fn as_bytes(&self) -> [u8; 4] {
         match self {
             Self::Ping => [0, 0, 0, 1],
-            Self::Lookup => [0, 0, 0, 2],
-            Self::Action => [0, 0, 0, 3],
-            Self::Subscribe => [0, 0, 0, 4],
-            Self::Subscribed => [0, 0, 0, 5],
+            Self::Pong => [0, 0, 0, 2],
+            Self::Lookup => [0, 0, 1, 0],
+            Self::Details => [0, 0, 1, 1],
+            Self::Subscribe => [0, 1, 0, 0],
+            Self::Unsubscribe => [0, 1, 0, 1],
+            Self::Action => [1, 0, 0, 0],
         }
     }
 }

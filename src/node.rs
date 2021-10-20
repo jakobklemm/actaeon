@@ -103,6 +103,8 @@ pub struct Link {
 }
 
 impl Node {
+    /// Creates a new Node with the current timestamp. The Link can be
+    /// None but should be provided.
     pub fn new(address: Address, link: Option<Link>) -> Self {
         Self {
             address,
@@ -131,6 +133,9 @@ impl Node {
 }
 
 impl Ord for Node {
+    /// Node Ordering is implemented based on the timestamps. THe
+    /// comparison could fail (for example if the system time is
+    /// invalid / before UNIX), it will simply unwrap and panic.
     fn cmp(&self, other: &Self) -> Ordering {
         other
             .timestamp
@@ -317,6 +322,33 @@ impl Link {
         self.attempts += 1;
         self.reachable = status;
     }
+
+    /// Exports the link details to bytes that can be sent over the
+    /// wire. Structure:
+    /// Address data,
+    /// Last 8 bytes: Port number
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        let address = self.ip.as_bytes();
+        let port = self.port.to_le_bytes();
+        data.append(&mut address.to_vec());
+        data.append(&mut port.to_vec());
+        return data;
+    }
+
+    pub fn from_bytes(mut data: Vec<u8>) -> Result<Link, Error> {
+        data.reverse();
+        let mut address = data.split_off(8);
+        data.reverse();
+        address.reverse();
+        let ip = String::from_utf8(address)?;
+        let mut port_bytes = [0; 8];
+        for (i, j) in data.iter().enumerate() {
+            port_bytes[i] = *j;
+        }
+        let port = u64::from_le_bytes(port_bytes);
+        Ok(Link::new(ip, port as usize))
+    }
 }
 
 #[cfg(test)]
@@ -380,5 +412,44 @@ mod tests {
         let a = Address::from_bytes(b).unwrap();
         let c = a.as_bytes();
         assert_eq!(b, c);
+    }
+
+    #[test]
+    fn test_to_address_string() {
+        let source = String::from("test");
+        let addr = source.to_address();
+        assert_eq!(addr.is_err(), false);
+    }
+
+    #[test]
+    fn test_to_address_u8() {
+        let source = [0; 32];
+        let addr = source.to_address();
+        assert_eq!(addr.is_err(), false);
+    }
+
+    #[test]
+    fn test_to_address_usize() {
+        let source = 42;
+        let addr = source.to_address();
+        assert_eq!(addr.is_err(), false);
+    }
+
+    #[test]
+    fn test_link_serialize() {
+        let l = Link::new(String::from("127.0.0.1"), 42);
+        let b = l.as_bytes();
+        let c = Link::from_bytes(b).unwrap();
+        assert_eq!(l, c);
+    }
+
+    #[test]
+    fn test_link_serialize_more() {
+        for i in 100..1000 {
+            let l = Link::new(i.to_string(), (i * 14) / 4);
+            let b = l.as_bytes();
+            let c = Link::from_bytes(b).unwrap();
+            assert_eq!(l, c);
+        }
     }
 }

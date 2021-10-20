@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::net::AddrParseError;
+use std::string::FromUtf8Error;
 use std::sync::mpsc::SendError;
 
 /// Collection of error types of the entire system. There is currently
@@ -39,6 +40,12 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(_err: std::io::Error) -> Self {
         Self::System(String::from("generic IO error"))
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(_err: FromUtf8Error) -> Self {
+        Self::System(String::from("address is not valid"))
     }
 }
 

@@ -16,8 +16,6 @@ use crate::topic::TopicBucket;
 use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread;
 
 /// Each message being sent between the Listener Thead and User Thread
@@ -76,7 +74,7 @@ pub struct Switch {
     cache: Cache,
     /// Represents the TCP Handler, currently just one struct. Later
     /// this will be replaced by a trait Object.
-    handler: Arc<Mutex<Handler>>,
+    handler: Handler,
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
@@ -172,13 +170,12 @@ impl Switch {
     pub fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
         let (c1, c2) = Channel::new();
         let cache = Cache::new(limit);
-        let handler = Handler::new(center.clone())?;
         let switch = Switch {
             channel: c1,
             cache,
-            handler: Arc::new(Mutex::new(handler)),
+            handler: Handler::new(center.clone())?,
             table: RefCell::new(Table::new(limit, center.clone())),
-            topics: RefCell::new(TopicBucket::new()),
+            topics: RefCell::new(TopicBucket::new(center.clone())),
             center: center.clone(),
         };
         let interface = Interface::new(c2, center);
@@ -188,7 +185,7 @@ impl Switch {
     pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
             // tcp messages
-            match self.handler.lock().unwrap().read() {
+            match self.handler.read() {
                 Some(wire) => {
                     if !self.cache.exists(wire.uuid) {
                         match wire.convert() {
@@ -197,6 +194,69 @@ impl Switch {
                                 log::trace!("new transaction: {:?}", t);
                                 let target = t.target();
                                 if self.topics.borrow().is_local(&target) {
+                                    // Differentiate message classes.
+                                    match t.class() {
+                                        Class::Ping => {
+                                            log::info!(
+                                                "received Ping request: {} from: {:?}",
+                                                t.uuid,
+                                                t.target()
+                                            );
+                                            let message = Message::new(
+                                                Class::Pong,
+                                                self.center.public.clone(),
+                                                target.clone(),
+                                                Vec::new(),
+                                            );
+                                            let transaction = Transaction::new(message);
+                                            let targets = self.table.borrow().get_copy(&target, 3);
+                                            for node in targets {
+                                                if self
+                                                    .handler
+                                                    .send(transaction.to_wire(), node)
+                                                    .is_err()
+                                                {
+                                                    // TODO: Deactivate & add to lookup queue.
+                                                    log::warn!("unable to reach node");
+                                                }
+                                            }
+                                        }
+                                        Class::Pong => {
+                                            // TODO Send to Signaling and update queue.
+                                            log::info!("received Ping request reply: {}", t.uuid);
+                                        }
+                                        Class::Subscribe => {
+                                            match self.topics.borrow_mut().find_mut(&target) {
+                                                Some(topic) => {
+                                                    topic.subscribers.add(t.source());
+                                                    let action = Command::System(
+                                                        SystemAction::Subscribe(t.source()),
+                                                    );
+                                                    if topic.channel.send(action).is_err() {
+                                                        self.topics.borrow_mut().remove(&target);
+                                                    }
+                                                }
+                                                None => {}
+                                            }
+                                        }
+                                        Class::Unsubscribe => {
+                                            match self.topics.borrow_mut().find_mut(&target) {
+                                                Some(topic) => {
+                                                    topic.subscribers.remove(&t.source());
+                                                    let action = Command::System(
+                                                        SystemAction::Unsubscribe(t.source()),
+                                                    );
+                                                    if topic.channel.send(action).is_err() {
+                                                        self.topics.borrow_mut().remove(&target);
+                                                    }
+                                                }
+                                                None => {}
+                                            }
+                                        }
+                                        Class::Lookup => {}
+                                        Class::Details => {}
+                                        Class::Action => {}
+                                    }
                                     self.cache.add(t.clone());
                                     match self.topics.borrow().find(&target) {
                                         Some(topic) => {
@@ -205,13 +265,8 @@ impl Switch {
                                                 // assumed the topic in user space
                                                 // has been derefed and can be
                                                 // disregarded.
-                                                let e = self.topics.borrow_mut().remove(&target);
-                                                if e.is_err() {
-                                                    log::error!(
-                                                        "unknown internal system error: {:?}",
-                                                        e
-                                                    );
-                                                }
+                                                //
+                                                // TODO: Send unsubscribe message (how to get subscribers?)
                                             }
                                         }
                                         None => {}
@@ -232,8 +287,7 @@ impl Switch {
                                         // TODO: Second messaging type
                                         // / send function for owned
                                         // valus.
-                                        let e =
-                                            self.handler.lock().unwrap().send(t.to_wire(), node);
+                                        let e = self.handler.send(t.to_wire(), node);
                                         if e.is_err() {
                                             log::error!("handler thread sending error: {:?}", e);
                                             self.table.borrow_mut().status(&target, false);
@@ -266,7 +320,7 @@ impl Switch {
                             // on tcp fail update the RT (and fail the sending?)
                             for node in targets {
                                 // TODO: handle errors
-                                let e = self.handler.lock().unwrap().send(t.to_wire(), node);
+                                let e = self.handler.send(t.to_wire(), node);
                                 if e.is_err() {
                                     log::error!("tcp handler failed: {:?}", e);
                                 }
@@ -299,11 +353,7 @@ impl Switch {
                                 let transaction = Transaction::new(message);
                                 let targets = self.table.borrow().get_copy(&address, 3);
                                 for node in targets {
-                                    let e = self
-                                        .handler
-                                        .lock()
-                                        .unwrap()
-                                        .send(transaction.to_wire(), node);
+                                    let e = self.handler.send(transaction.to_wire(), node);
                                     if e.is_err() {
                                         log::error!("unable to connect to node");
                                         // TODO: Update table and
@@ -335,7 +385,7 @@ impl Switch {
                                 // on tcp fail update the RT (and fail the sending?)
                                 for node in targets {
                                     // TODO: handle errors
-                                    let e = self.handler.lock().unwrap().send(t.to_wire(), node);
+                                    let e = self.handler.send(t.to_wire(), node);
                                     if e.is_err() {
                                         log::error!("tcp handler failed: {:?}", e);
                                     }
@@ -368,11 +418,7 @@ impl Switch {
                                     let transaction = Transaction::new(message);
                                     let targets = self.table.borrow().get_copy(&address, 3);
                                     for node in targets {
-                                        let e = self
-                                            .handler
-                                            .lock()
-                                            .unwrap()
-                                            .send(transaction.to_wire(), node);
+                                        let e = self.handler.send(transaction.to_wire(), node);
                                         if e.is_err() {
                                             log::error!("unable to connect to node");
                                             // TODO: Update table and
