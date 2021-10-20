@@ -71,6 +71,10 @@ pub enum Class {
     Lookup,
     /// Return value for Lookup calls.
     Details,
+    /// Bootstrap, Initiate into remote RTs
+    Bootstrap,
+    /// Receive large numbers of RT infos.
+    Bulk,
     /// Messages for the user
     Action,
     /// Subscribe to another topic
@@ -190,6 +194,8 @@ impl Class {
             [0, 0, 0, 2] => Ok(Self::Pong),
             [0, 0, 1, 0] => Ok(Self::Lookup),
             [0, 0, 1, 1] => Ok(Self::Details),
+            [0, 0, 1, 2] => Ok(Self::Bootstrap),
+            [0, 0, 1, 3] => Ok(Self::Bulk),
             [0, 1, 0, 0] => Ok(Self::Subscribe),
             [0, 1, 0, 1] => Ok(Self::Unsubscribe),
             [1, 0, 0, 0] => Ok(Self::Action),
@@ -207,6 +213,8 @@ impl Class {
             Self::Pong => [0, 0, 0, 2],
             Self::Lookup => [0, 0, 1, 0],
             Self::Details => [0, 0, 1, 1],
+            Self::Bootstrap => [0, 0, 1, 3],
+            Self::Bulk => [0, 0, 1, 4],
             Self::Subscribe => [0, 1, 0, 0],
             Self::Unsubscribe => [0, 1, 0, 1],
             Self::Action => [1, 0, 0, 0],

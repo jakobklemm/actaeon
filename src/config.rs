@@ -52,7 +52,7 @@ struct LoadConfig {
 /// converted, so the function might fail. Depending on how much is
 /// eventually handled by the application instead of the implementer
 /// it might also contain details about logging.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Config {
     /// Defines the size value of the kademlia based routing system,
     /// comparable to the variable "k". It defines the size of each

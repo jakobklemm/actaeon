@@ -6,6 +6,7 @@
 //! supposed to be more modularized. Instead it handles the thread and
 //! the cache, each protocol then has its own module.
 
+use crate::config::Config;
 use crate::error::Error;
 use crate::interface::Interface;
 use crate::message::Message;
@@ -71,7 +72,7 @@ pub struct Switch {
     /// New transactions that are intended for the user will be
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
-    cache: Cache,
+    cache: RefCell<Cache>,
     /// Represents the TCP Handler, currently just one struct. Later
     /// this will be replaced by a trait Object.
     handler: Handler,
@@ -167,18 +168,18 @@ impl Channel {
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
-    pub fn new(center: Center, limit: usize) -> Result<(Switch, Interface), Error> {
+    pub fn new(center: Center, config: Config, limit: usize) -> Result<(Switch, Interface), Error> {
         let (c1, c2) = Channel::new();
         let cache = Cache::new(limit);
         let switch = Switch {
             channel: c1,
-            cache,
+            cache: RefCell::new(cache),
             handler: Handler::new(center.clone())?,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
             center: center.clone(),
         };
-        let interface = Interface::new(c2, center);
+        let interface = Interface::new(c2, config, center);
         Ok((switch, interface))
     }
 
@@ -187,12 +188,19 @@ impl Switch {
             // tcp messages
             match self.handler.read() {
                 Some(wire) => {
-                    if !self.cache.exists(wire.uuid) {
+                    if !self.cache.borrow().exists(wire.uuid) {
                         match wire.convert() {
                             Ok(t) => {
                                 log::info!("received new TCP message: {:?}", t);
                                 let target = t.target();
                                 let source = t.source();
+                                match self.table.borrow().find(&source) {
+                                    Some(_) => {}
+                                    None => {
+                                        let node = Node::new(source.clone(), None);
+                                        self.table.borrow_mut().add(node);
+                                    }
+                                }
                                 match self.table.borrow().find(&target) {
                                     Some(_) => {}
                                     None => {
@@ -316,9 +324,59 @@ impl Switch {
                                                 }
                                             }
                                         }
+                                        Class::Bootstrap => {
+                                            let bytes = self.table.borrow().export();
+                                            let message = Message::new(
+                                                Class::Bulk,
+                                                self.center.public.clone(),
+                                                source.clone(),
+                                                bytes,
+                                            );
+                                            let transaction = Transaction::new(message);
+                                            let targets = self.table.borrow().get_copy(&source, 3);
+                                            for node in targets {
+                                                if self
+                                                    .handler
+                                                    .send(transaction.to_wire(), node)
+                                                    .is_err()
+                                                {
+                                                    // TODO: Deactivate & add to lookup queue.
+                                                    log::warn!("unable to reach node");
+                                                    self.table.borrow_mut().status(&source, false);
+                                                }
+                                            }
+                                        }
+                                        Class::Bulk => {
+                                            t.message
+                                                .body
+                                                .clone()
+                                                .as_bytes()
+                                                .chunks(32)
+                                                .map(|x| {
+                                                    let mut bytes: [u8; 32] = [0; 32];
+                                                    for (i, j) in x.iter().enumerate() {
+                                                        bytes[i] = *j;
+                                                    }
+                                                    bytes
+                                                })
+                                                .map(|x| match Address::from_bytes(x) {
+                                                    Ok(a) => Some(Node::new(a, None)),
+                                                    Err(e) => {
+                                                        log::warn!(
+                                                            "received invalid Address data: {}",
+                                                            e
+                                                        );
+                                                        None
+                                                    }
+                                                })
+                                                .for_each(|x| match x {
+                                                    Some(n) => self.table.borrow_mut().add(n),
+                                                    None => {}
+                                                });
+                                        }
                                         Class::Action => {}
                                     }
-                                    self.cache.add(t.clone());
+                                    self.cache.borrow_mut().add(t.clone());
                                     match self.topics.borrow().find(&target) {
                                         Some(topic) => {
                                             if topic.channel.send(Command::User(t)).is_err() {
@@ -333,14 +391,6 @@ impl Switch {
                                         None => {}
                                     }
                                 } else {
-                                    let source = t.source();
-                                    match self.table.borrow().find(&source) {
-                                        Some(_) => {}
-                                        None => {
-                                            let node = Node::new(source, None);
-                                            self.table.borrow_mut().add(node);
-                                        }
-                                    }
                                     // Kademlia
                                     let targets = self.table.borrow().get_copy(&target, 3);
                                     for node in targets {
@@ -394,7 +444,7 @@ impl Switch {
                             }
                             SwitchAction::Cache => {
                                 log::info!("emptied the handler cache");
-                                self.cache.empty();
+                                self.cache.borrow_mut().empty();
                             }
                         },
                         Command::System(action) => match action {
@@ -459,7 +509,7 @@ impl Switch {
                                 }
                                 SwitchAction::Cache => {
                                     log::info!("emptied the handler cache");
-                                    self.cache.empty();
+                                    self.cache.borrow_mut().empty();
                                 }
                             },
                             Command::System(action) => match action {

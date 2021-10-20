@@ -199,6 +199,19 @@ impl Table {
         self.root.len()
     }
 
+    /// Creates a Vec of bytes of all addresses in the table.
+    /// Currently not the most efficient method is used, since all the
+    /// Link data is not transmitted, this needs to be fixed in the
+    /// future.
+    pub fn export(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        let nodes = self.get(&self.center.public, self.len());
+        for n in nodes {
+            data.append(&mut n.address.as_bytes().to_vec());
+        }
+        return data;
+    }
+
     /// Return the Address of the Center. Shorthand for the public
     /// field.
     pub fn center(&self) -> Address {
@@ -613,6 +626,24 @@ mod tests {
         let a = elem.len() <= elem.capacity();
 
         assert_eq!(a, true);
+    }
+
+    #[test]
+    fn test_capacity_get() {
+        let b = gen_bucket();
+        let p = Property {
+            lower: 0,
+            upper: 255,
+        };
+        let mut elem = Element::Leaf(b, p);
+        let center = gen_center();
+
+        for i in 0..1000 {
+            elem.add(gen_node(&i.to_string()), &center);
+        }
+
+        let nodes = elem.get(&center.public, &center, elem.len());
+        assert_eq!(nodes.len(), elem.len());
     }
 
     #[test]

@@ -1,9 +1,11 @@
 //! # Interface
 
+use crate::config::Config;
 use crate::error::Error;
 use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
+use crate::signaling::Signaling;
 use crate::switch::Channel;
 use crate::switch::{Command, SwitchAction, SystemAction};
 use crate::topic::Topic;
@@ -18,6 +20,7 @@ pub struct Interface {
     /// functions, which will internally receive messages from the
     /// channel.
     channel: Channel,
+    signaling: Signaling,
     /// Center used for getting message origins.
     center: Center,
 }
@@ -26,8 +29,12 @@ impl Interface {
     /// Creates a new Interface. This function is currently one of the
     /// core components of starting up the system. In the future this
     /// might have to be wrapped by a start function.
-    pub fn new(channel: Channel, center: Center) -> Self {
-        Self { channel, center }
+    pub fn new(channel: Channel, config: Config, center: Center) -> Self {
+        Self {
+            channel,
+            center,
+            signaling: Signaling::new(config.signaling),
+        }
     }
 
     pub fn try_recv(&self) -> Option<Transaction> {
@@ -113,5 +120,9 @@ impl Interface {
         if e.is_err() {
             log::error!("error terminating thread: {:?}", e);
         }
+    }
+
+    pub fn bootstrap(&self) {
+        self.signaling.clone().start()
     }
 }
