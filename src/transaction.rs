@@ -65,21 +65,23 @@ pub struct Wire {
 pub enum Class {
     /// Internal IsAlive check
     Ping,
-    /// Return of Ping
+    /// Return of Ping.
     Pong,
-    /// Internal NodeID lookup
+    /// Internal NodeID lookup.
     Lookup,
     /// Return value for Lookup calls.
     Details,
-    /// Bootstrap, Initiate into remote RTs
+    /// Bootstrap, Initiate into remote RTs.
     Bootstrap,
     /// Receive large numbers of RT infos.
     Bulk,
-    /// Messages for the user
+    /// Message coming from a user node to the distribution node.
+    Record,
+    /// Messages coming from a distribution node to the target node.
     Action,
-    /// Subscribe to another topic
+    /// Subscribe to another topic.
     Subscribe,
-    /// Opposite of Subscribe
+    /// Opposite of Subscribe.
     Unsubscribe,
 }
 
@@ -154,6 +156,27 @@ impl Transaction {
         self.message.class.clone()
     }
 
+    /// When a message comes from a user to the record location the
+    /// source Address should not change from the original node (maybe
+    /// this has to be updated in a future version by including a
+    /// second source field (source + origin)), only the target has to
+    /// be updated for each target. This directly returns a new
+    /// Transaction with the updated target that can be delivered.
+    pub fn redirect(&self, target: Address) -> Transaction {
+        let mut transaction = self.clone();
+        transaction.message.target = target;
+        return transaction;
+    }
+
+    /// Easy way of creating a "mostly primitive" version of the core
+    /// relevant fields of a Transaction. Can be used for working on
+    /// the received data in other parts of the users applications
+    /// without relying on Actaeon structures. It simply returns a
+    /// touple of the source of a message with its body.
+    pub fn export(&self) -> (Address, Vec<u8>) {
+        (self.source(), self.message.body.clone().as_bytes())
+    }
+
     /// This function returns the duration since the Transaction was
     /// created. While it should mostly be without problems, it can
     /// fail if the OS clock is unreliable.
@@ -198,7 +221,8 @@ impl Class {
             [0, 0, 1, 3] => Ok(Self::Bulk),
             [0, 1, 0, 0] => Ok(Self::Subscribe),
             [0, 1, 0, 1] => Ok(Self::Unsubscribe),
-            [1, 0, 0, 0] => Ok(Self::Action),
+            [1, 0, 0, 0] => Ok(Self::Record),
+            [1, 0, 0, 1] => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
     }
@@ -217,7 +241,8 @@ impl Class {
             Self::Bulk => [0, 0, 1, 4],
             Self::Subscribe => [0, 1, 0, 0],
             Self::Unsubscribe => [0, 1, 0, 1],
-            Self::Action => [1, 0, 0, 0],
+            Self::Record => [1, 0, 0, 0],
+            Self::Action => [1, 0, 0, 1],
         }
     }
 }

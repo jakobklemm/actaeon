@@ -212,6 +212,32 @@ impl Table {
         return data;
     }
 
+    /// Tries to determine whether a given Address is local or not.
+    /// This is not a lookup or exact operation, since closer nodes
+    /// might be unknown to this node. It returns true if no closer
+    /// node than Center is found. (This has to be expanded to
+    /// multiple nodes based on the replication factor of the system).
+    ///
+    /// It works by getting the five closest nodes to the address.
+    /// Then the distances get calculated. The function returns true
+    /// if the distance between the address and the Center is smaller
+    /// than atleast one of the fetched Nodes.
+    pub fn should_be_local(&self, address: &Address) -> bool {
+        let nodes = self.get(address, 5);
+        let mut addrs: Vec<Address> = nodes.iter().map(|x| x.address.clone()).collect();
+        addrs.push(address.clone());
+        addrs.sort_by(|a, b| {
+            let left = (a.clone() ^ self.center.public.clone())[0];
+            let right = (b.clone() ^ self.center.public.clone())[0];
+            left.partial_cmp(&right).unwrap()
+        });
+        let index = addrs.iter().position(|e| e == &self.center.public);
+        match index {
+            Some(i) => i <= 3,
+            None => false,
+        }
+    }
+
     /// Return the Address of the Center. Shorthand for the public
     /// field.
     pub fn center(&self) -> Address {
@@ -1240,6 +1266,32 @@ mod tests {
         let center = gen_center_near();
         let node = gen_node_far();
         assert_eq!(split.near.in_range(&node.address, &center), false);
+    }
+
+    #[test]
+    fn test_should_be_local_manual() {
+        let center = gen_center_near();
+        let address = gen_node_near().address;
+        let nodes = vec![
+            gen_node("first"),
+            gen_node("second"),
+            gen_node("third"),
+            gen_node("fourth"),
+            gen_node("fifth"),
+        ];
+        let mut addrs: Vec<Address> = nodes.iter().map(|x| x.address.clone()).collect();
+        addrs.push(address.clone());
+        addrs.sort_by(|a, b| {
+            let left = (a.clone() ^ center.public.clone())[0];
+            let right = (b.clone() ^ center.public.clone())[0];
+            left.partial_cmp(&right).unwrap()
+        });
+        let index = addrs.iter().position(|e| e == &center.public);
+        let res = match index {
+            Some(i) => i <= 3,
+            None => false,
+        };
+        assert_eq!(res, true);
     }
 
     fn gen_split() -> Split {

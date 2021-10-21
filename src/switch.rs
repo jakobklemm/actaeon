@@ -14,7 +14,7 @@ use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
 use crate::signaling::ActionBucket;
 use crate::tcp::Handler;
-use crate::topic::TopicBucket;
+use crate::topic::{RecordBucket, TopicBucket};
 use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -85,6 +85,13 @@ pub struct Switch {
     /// RefCell in order to make interactions in the Thread closure
     /// easier.
     topics: RefCell<TopicBucket>,
+    /// Topics that aren't created / managed by the user, rather are
+    /// part of the Kademlia system. Since the Addresses of Topics
+    /// need to be fixed / known the location in the system can't be
+    /// guaranteed. Instead on the correct nodes a record of that
+    /// topic is kept. From there the actual distribution of messages
+    /// takes place.
+    records: RefCell<RecordBucket>,
     /// Another copy of the Center data used for generating messages.
     center: Center,
     /// Queue of actions for the signaling thread.
@@ -181,6 +188,7 @@ impl Switch {
             handler: Handler::new(center.clone())?,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
+            records: RefCell::new(RecordBucket::new(center.clone())),
             center: center.clone(),
             queue: queue.clone(),
         };
@@ -196,9 +204,13 @@ impl Switch {
                     if !self.cache.borrow().exists(wire.uuid) {
                         match wire.convert() {
                             Ok(t) => {
+                                self.cache.borrow_mut().add(t.clone());
                                 log::info!("received new TCP message: {:?}", t);
                                 let target = t.target();
                                 let source = t.source();
+                                // 1. Add the source to the table if it
+                                // doesn't exist already (link state
+                                // defaults to None).
                                 match self.table.borrow().find(&source) {
                                     Some(_) => {}
                                     None => {
@@ -206,6 +218,9 @@ impl Switch {
                                         self.table.borrow_mut().add(node);
                                     }
                                 }
+                                // 2. Add the source to the table if it
+                                // doesn't exist already (link state
+                                // defaults to None).
                                 match self.table.borrow().find(&target) {
                                     Some(_) => {}
                                     None => {
@@ -379,21 +394,77 @@ impl Switch {
                                                     None => {}
                                                 });
                                         }
-                                        Class::Action => {}
-                                    }
-                                    self.cache.borrow_mut().add(t.clone());
-                                    match self.topics.borrow().find(&target) {
-                                        Some(topic) => {
-                                            if topic.channel.send(Command::User(t)).is_err() {
-                                                // If the topic channel is offline, it can be
-                                                // assumed the topic in user space
-                                                // has been derefed and can be
-                                                // disregarded.
-                                                //
-                                                // TODO: Send unsubscribe message (how to get subscribers?)
+                                        Class::Record => {
+                                            if self.table.borrow().should_be_local(&target) {
+                                                match self.records.borrow().find_copy(&target) {
+                                                    Some(record) => {
+                                                        for address in record.subscribers {
+                                                            // Message from user, distribute.
+                                                            let transaction =
+                                                                t.redirect(address.clone());
+                                                            let targets = self
+                                                                .table
+                                                                .borrow()
+                                                                .get_copy(&address, 3);
+                                                            for node in targets {
+                                                                if self
+                                                                    .handler
+                                                                    .send(
+                                                                        transaction.to_wire(),
+                                                                        node,
+                                                                    )
+                                                                    .is_err()
+                                                                {
+                                                                    // TODO: Deactivate & add to lookup queue.
+                                                                    log::warn!(
+                                                                        "unable to reach node"
+                                                                    );
+                                                                    self.table
+                                                                        .borrow_mut()
+                                                                        .status(&source, false);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    None => {
+                                                        let targets = self
+                                                            .table
+                                                            .borrow()
+                                                            .get_copy(&t.target(), 3);
+                                                        for node in targets {
+                                                            if self
+                                                                .handler
+                                                                .send(t.to_wire(), node)
+                                                                .is_err()
+                                                            {
+                                                                // TODO: Deactivate & add to lookup queue.
+                                                                log::warn!("unable to reach node");
+                                                                self.table
+                                                                    .borrow_mut()
+                                                                    .status(&source, false);
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
-                                        None => {}
+                                        Class::Action => {
+                                            self.cache.borrow_mut().add(t.clone());
+                                            match self.topics.borrow().find(&target) {
+                                                Some(topic) => {
+                                                    if topic.channel.send(Command::User(t)).is_err()
+                                                    {
+                                                        // If the topic channel is offline, it can be
+                                                        // assumed the topic in user space
+                                                        // has been derefed and can be
+                                                        // disregarded.
+                                                        //
+                                                        // TODO: Send unsubscribe message (how to get subscribers?)
+                                                    }
+                                                }
+                                                None => {}
+                                            }
+                                        }
                                     }
                                 } else {
                                     // Kademlia

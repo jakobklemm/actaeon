@@ -34,7 +34,7 @@ pub struct Topic {
 
 /// Wrapper structure to enable faster operations on all stored
 /// subscribers of a Topic. This object will be used in each Topic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubscriberBucket {
     /// List of the Addresses of all Subscribers.
     subscribers: Vec<Address>,
@@ -48,6 +48,22 @@ pub struct TopicBucket {
     /// List of Topics that will be stored on the Handler Thread.
     pub topics: Vec<Topic>,
     /// This also requires a copy of the Center.
+    pub center: Center,
+}
+
+/// Dedicated struct of topics that aren't for the user but rather
+/// internally for the system. They are stored on the Handler thread and
+#[derive(Clone)]
+pub struct Record {
+    pub address: Address,
+    pub subscribers: SubscriberBucket,
+}
+
+/// Similar to the TopicBucket but for the Handler Records.
+///
+/// TODO: Create generic bucket implentation.
+pub struct RecordBucket {
+    pub records: Vec<Record>,
     pub center: Center,
 }
 
@@ -311,6 +327,72 @@ impl TopicBucket {
 
     pub fn len(&self) -> usize {
         self.topics.len()
+    }
+}
+
+impl RecordBucket {
+    pub fn new(center: Center) -> Self {
+        Self {
+            records: Vec::new(),
+            center,
+        }
+    }
+
+    pub fn add(&mut self, topic: Record) {
+        if self.find(&topic.address).is_none() {
+            self.records.push(topic)
+        }
+    }
+
+    pub fn find(&self, search: &Address) -> Option<&Record> {
+        let index = self.records.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => self.records.get(i),
+            None => None,
+        }
+    }
+
+    pub fn find_copy(&self, search: &Address) -> Option<Record> {
+        let index = self.records.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => match self.records.get(i) {
+                Some(n) => Some(n.clone()),
+                None => None,
+            },
+            None => None,
+        }
+    }
+
+    pub fn find_mut(&mut self, search: &Address) -> Option<&mut Record> {
+        let index = self.records.iter().position(|e| &e.address == search);
+        match index {
+            Some(i) => self.records.get_mut(i),
+            None => None,
+        }
+    }
+
+    pub fn remove(&mut self, target: &Address) {
+        let index = self.records.iter().position(|e| &e.address == target);
+        match index {
+            Some(i) => {
+                self.records.remove(i);
+            }
+            None => {}
+        }
+    }
+
+    pub fn is_local(&self, query: &Address) -> bool {
+        if query == &self.center.public {
+            return true;
+        }
+        match self.find(query) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.records.len()
     }
 }
 
