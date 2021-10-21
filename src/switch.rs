@@ -12,7 +12,7 @@ use crate::interface::Interface;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
-use crate::signaling::ActionBucket;
+use crate::signaling::{Action, ActionBucket};
 use crate::tcp::Handler;
 use crate::topic::{RecordBucket, TopicBucket};
 use crate::transaction::{Class, Transaction};
@@ -77,6 +77,9 @@ pub struct Switch {
     /// Represents the TCP Handler, currently just one struct. Later
     /// this will be replaced by a trait Object.
     handler: Handler,
+    /// Each Message will be sent out multiple times to ensure
+    /// delivery, currently it is simply hard coded.
+    replication: usize,
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
@@ -186,6 +189,7 @@ impl Switch {
             channel: c1,
             cache: RefCell::new(cache),
             handler: Handler::new(center.clone())?,
+            replication: 3,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
             records: RefCell::new(RecordBucket::new(center.clone())),
@@ -201,50 +205,67 @@ impl Switch {
             // tcp messages
             match self.handler.read() {
                 Some(wire) => {
+                    // 0. Check if the message is known already.
                     if !self.cache.borrow().exists(wire.uuid) {
                         match wire.convert() {
                             Ok(t) => {
+                                // 1. Add it to the cache.
                                 self.cache.borrow_mut().add(t.clone());
                                 log::info!("received new TCP message: {:?}", t);
                                 let target = t.target();
                                 let source = t.source();
-                                // 1. Add the source to the table if it
-                                // doesn't exist already (link state
-                                // defaults to None).
-                                match self.table.borrow().find(&source) {
-                                    Some(_) => {}
-                                    None => {
-                                        let node = Node::new(source.clone(), None);
-                                        self.table.borrow_mut().add(node);
-                                    }
-                                }
                                 // 2. Add the source to the table if it
                                 // doesn't exist already (link state
-                                // defaults to None).
-                                match self.table.borrow().find(&target) {
-                                    Some(_) => {}
-                                    None => {
-                                        let node = Node::new(target.clone(), None);
-                                        self.table.borrow_mut().add(node);
+                                // defaults to None), but only if the
+                                // source isn't the Center.
+                                if &source == &self.center.public {
+                                    match self.table.borrow().find(&source) {
+                                        Some(_) => {}
+                                        None => {
+                                            let node = Node::new(source.clone(), None);
+                                            self.table.borrow_mut().add(node);
+                                            // TODO: Add signaling lookup
+                                        }
                                     }
                                 }
-                                if self.topics.borrow().is_local(&target) {
-                                    // Differentiate message classes.
+                                // 3. Add the target node to the RT,
+                                // but only if its not the Center.
+                                if &target == &self.center.public {
+                                    match self.table.borrow().find(&source) {
+                                        Some(_) => {}
+                                        None => {
+                                            let node = Node::new(source.clone(), None);
+                                            self.table.borrow_mut().add(node);
+                                            // TODO: Add signaling lookup
+                                        }
+                                    }
+                                    // 4. Handle messages directly for this Node.
+                                    // Only some Classes can
+                                    // reasonably be sent to a Node
+                                    // directly, instead of to a
+                                    // Topic. Any other case currently
+                                    // just gets dropped.
                                     match t.class() {
+                                        // 4.1 A Ping requires a return Pong message. It's
+                                        // a new Message with the same
+                                        // body (the action UUID).
                                         Class::Ping => {
                                             log::info!(
                                                 "received Ping request: {} from: {:?}",
                                                 t.uuid,
-                                                t.target()
+                                                t.source()
                                             );
                                             let message = Message::new(
                                                 Class::Pong,
                                                 self.center.public.clone(),
                                                 target.clone(),
-                                                Vec::new(),
+                                                t.message.body.as_bytes(),
                                             );
                                             let transaction = Transaction::new(message);
-                                            let targets = self.table.borrow().get_copy(&target, 3);
+                                            let targets = self
+                                                .table
+                                                .borrow()
+                                                .get_copy(&target, self.replication);
                                             for node in targets {
                                                 if self
                                                     .handler
@@ -257,93 +278,136 @@ impl Switch {
                                                 }
                                             }
                                         }
+
+                                        // 4.2 Getting a Pong requires an update in the
+                                        // Signaling queue, the
+                                        // message body represents the
+                                        // Action Uuid.
                                         Class::Pong => {
-                                            // TODO Send to Signaling and update queue.
                                             log::info!("received Ping request reply: {}", t.uuid);
-                                        }
-                                        Class::Subscribe => {
-                                            log::info!("received subscribe request: {}", t.uuid);
-                                            match self.topics.borrow_mut().find_mut(&target) {
-                                                Some(topic) => {
-                                                    topic.subscribers.add(t.source());
-                                                    let action = Command::System(
-                                                        SystemAction::Subscribe(t.source()),
-                                                    );
-                                                    if topic.channel.send(action).is_err() {
-                                                        self.topics.borrow_mut().remove(&target);
-                                                    }
+                                            let bytes = t.message.body.as_bytes();
+                                            if bytes.len() == 16 {
+                                                let mut uuid = [0; 16];
+                                                for (i, j) in bytes.iter().enumerate() {
+                                                    uuid[i] = *j;
                                                 }
-                                                None => {}
+                                                let uuid = uuid::Uuid::from_bytes(uuid);
+                                                self.queue.remove(uuid);
                                             }
                                         }
-                                        Class::Unsubscribe => {
-                                            log::info!("received unsubscribe request: {}", t.uuid);
-                                            match self.topics.borrow_mut().find_mut(&target) {
-                                                Some(topic) => {
-                                                    topic.subscribers.remove(&t.source());
-                                                    let action = Command::System(
-                                                        SystemAction::Unsubscribe(t.source()),
-                                                    );
-                                                    if topic.channel.send(action).is_err() {
-                                                        self.topics.borrow_mut().remove(&target);
-                                                    }
-                                                }
-                                                None => {}
-                                            }
-                                        }
+
+                                        // 4.3 Getting a Lookup requires Node details in
+                                        // return as a Details
+                                        // request. This contains the
+                                        // closest Node to the
+                                        // requested one in the body +
+                                        // Link data.
                                         Class::Lookup => {
-                                            log::info!("received lookup request: {}", t.uuid,);
-                                            let message = Message::new(
-                                                Class::Details,
-                                                self.center.public.clone(),
-                                                target.clone(),
-                                                self.center.link.as_bytes(),
-                                            );
-                                            let transaction = Transaction::new(message);
-                                            let targets = self.table.borrow().get_copy(&target, 3);
-                                            for node in targets {
-                                                if self
-                                                    .handler
-                                                    .send(transaction.to_wire(), node)
-                                                    .is_err()
-                                                {
-                                                    // TODO: Deactivate & add to lookup queue.
-                                                    log::warn!("unable to reach node");
-                                                    self.table.borrow_mut().status(&source, false);
+                                            log::info!("received lookup request: {}", t.uuid);
+                                            // 4.3.1 Parse the message body (the node to query for)
+                                            // into an Address.
+                                            let query = t.message.body.as_bytes();
+                                            let addr = Address::from_slice(&query);
+                                            match addr {
+                                                Ok(address) => {
+                                                    // 4.3.2 Get the closest known node to that search query.
+                                                    let details =
+                                                        self.table.borrow().get_copy(&address, 1);
+                                                    let result: Node;
+                                                    // 4.3.3 If the RT is empty, return the center instead.
+                                                    if details.len() == 0 {
+                                                        let node = Node::new(
+                                                            self.center.public.clone(),
+                                                            Some(self.center.link.clone()),
+                                                        );
+                                                        result = node;
+                                                    } else {
+                                                        // 4.3.4 Compute the two distances, choose the closer one.
+                                                        let node = details.first().unwrap().clone();
+                                                        let center_distance =
+                                                            &self.center.public ^ &address;
+                                                        let table_distance =
+                                                            &node.address ^ &address;
+                                                        if center_distance >= table_distance {
+                                                            let node = Node::new(
+                                                                self.center.public.clone(),
+                                                                Some(self.center.link.clone()),
+                                                            );
+                                                            result = node;
+                                                        } else {
+                                                            // TODO: Use the center over the query if the Link is None
+                                                            result = node;
+                                                        }
+                                                    }
+                                                    // 4.3.5 Construct a new message and Transaction, since a new ID is required.
+                                                    // The body of the message is the serialized Node.
+                                                    let message = Message::new(
+                                                        Class::Details,
+                                                        self.center.public.clone(),
+                                                        target.clone(),
+                                                        result.as_bytes(),
+                                                    );
+                                                    let transaction = Transaction::new(message);
+                                                    // 4.3.6 Distribute the Message through the system.
+                                                    let targets = self
+                                                        .table
+                                                        .borrow()
+                                                        .get_copy(&target, self.replication);
+                                                    for node in targets {
+                                                        let send_target = node.address.clone();
+                                                        if self
+                                                            .handler
+                                                            .send(transaction.to_wire(), node)
+                                                            .is_err()
+                                                        {
+                                                            log::warn!(
+                                                                "unable to reach node: {:?}",
+                                                                send_target
+                                                            );
+                                                            self.table
+                                                                .borrow_mut()
+                                                                .status(&source, false);
+                                                            let action =
+                                                                Action::lookup(send_target);
+                                                            self.queue.add(action);
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::warn!("received invalid lookup query: {} for: {:?}", e, query);
                                                 }
                                             }
                                         }
+
+                                        // 4.4 Return of a Lookup request. Contains the
+                                        // Link of the requested Node
+                                        // in the body.
                                         Class::Details => {
-                                            match self.table.borrow_mut().find_mut(&source) {
+                                            // 4.4.1 Construct the Node from the body.
+                                            let incoming =
+                                                Node::from_bytes(t.message.body.as_bytes());
+                                            // 4.4.2 Try to find the Node in the table.
+                                            match self
+                                                .table
+                                                .borrow_mut()
+                                                .find_mut(&incoming.address)
+                                            {
                                                 Some(node) => {
-                                                    let body = Link::from_bytes(
-                                                        t.message.body.clone().as_bytes(),
-                                                    );
-                                                    if body.is_err() {
-                                                        log::warn!(
-                                                            "received invalid details data: {:?}",
-                                                            t.message.body.clone().as_bytes()
-                                                        );
-                                                    } else {
-                                                        node.link = Some(body.unwrap());
-                                                    }
+                                                    // 4.4.3 Replace the Node Link with incoming data.
+                                                    node.link = incoming.link;
                                                 }
                                                 None => {
-                                                    let body = Link::from_bytes(
-                                                        t.message.body.clone().as_bytes(),
-                                                    );
-                                                    if body.is_err() {
-                                                        log::warn!("received invalid details data",);
-                                                    } else {
-                                                        let node = Node::new(
-                                                            source.clone(),
-                                                            Some(body.unwrap()),
-                                                        );
-                                                        self.table.borrow_mut().add(node);
-                                                    }
+                                                    // 4.4.4 If no Node was found add the new one.
+                                                    self.table.borrow_mut().add(incoming);
                                                 }
                                             }
                                         }
+
+                                        // 4.5 Requests the entire routing table to be transfered.
+                                        // Since it most likely comes
+                                        // from a new Node the Link
+                                        // details have to be provided
+                                        // in the body.
                                         Class::Bootstrap => {
                                             let bytes = self.table.borrow().export();
                                             let message = Message::new(
@@ -353,7 +417,10 @@ impl Switch {
                                                 bytes,
                                             );
                                             let transaction = Transaction::new(message);
-                                            let targets = self.table.borrow().get_copy(&source, 3);
+                                            let targets = self
+                                                .table
+                                                .borrow()
+                                                .get_copy(&source, self.replication);
                                             for node in targets {
                                                 if self
                                                     .handler
@@ -366,6 +433,7 @@ impl Switch {
                                                 }
                                             }
                                         }
+
                                         Class::Bulk => {
                                             t.message
                                                 .body
@@ -394,62 +462,8 @@ impl Switch {
                                                     None => {}
                                                 });
                                         }
-                                        Class::Record => {
-                                            if self.table.borrow().should_be_local(&target) {
-                                                match self.records.borrow().find_copy(&target) {
-                                                    Some(record) => {
-                                                        for address in record.subscribers {
-                                                            // Message from user, distribute.
-                                                            let transaction =
-                                                                t.redirect(address.clone());
-                                                            let targets = self
-                                                                .table
-                                                                .borrow()
-                                                                .get_copy(&address, 3);
-                                                            for node in targets {
-                                                                if self
-                                                                    .handler
-                                                                    .send(
-                                                                        transaction.to_wire(),
-                                                                        node,
-                                                                    )
-                                                                    .is_err()
-                                                                {
-                                                                    // TODO: Deactivate & add to lookup queue.
-                                                                    log::warn!(
-                                                                        "unable to reach node"
-                                                                    );
-                                                                    self.table
-                                                                        .borrow_mut()
-                                                                        .status(&source, false);
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    None => {
-                                                        let targets = self
-                                                            .table
-                                                            .borrow()
-                                                            .get_copy(&t.target(), 3);
-                                                        for node in targets {
-                                                            if self
-                                                                .handler
-                                                                .send(t.to_wire(), node)
-                                                                .is_err()
-                                                            {
-                                                                // TODO: Deactivate & add to lookup queue.
-                                                                log::warn!("unable to reach node");
-                                                                self.table
-                                                                    .borrow_mut()
-                                                                    .status(&source, false);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
+
                                         Class::Action => {
-                                            self.cache.borrow_mut().add(t.clone());
                                             match self.topics.borrow().find(&target) {
                                                 Some(topic) => {
                                                     if topic.channel.send(Command::User(t)).is_err()
@@ -465,22 +479,7 @@ impl Switch {
                                                 None => {}
                                             }
                                         }
-                                    }
-                                } else {
-                                    // Kademlia
-                                    let targets = self.table.borrow().get_copy(&target, 3);
-                                    for node in targets {
-                                        let target = node.address.clone();
-                                        // TODO: Second messaging type
-                                        // / send function for owned
-                                        // valus.
-                                        let e = self.handler.send(t.to_wire(), node);
-                                        if e.is_err() {
-                                            log::error!("handler thread sending error: {:?}", e);
-                                            self.table.borrow_mut().status(&target, false);
-                                        } else {
-                                            self.table.borrow_mut().status(&target, true);
-                                        }
+                                        _ => {}
                                     }
                                 }
                             }
@@ -502,7 +501,8 @@ impl Switch {
                             log::info!("sending new message");
                             log::trace!("transaction: {:?}", t);
                             // TODO: number of targets
-                            let targets = self.table.borrow().get_copy(&t.target(), 5);
+                            let targets =
+                                self.table.borrow().get_copy(&t.target(), self.replication);
                             log::trace!("found following targets: {:?}", targets);
                             // on tcp fail update the RT (and fail the sending?)
                             for node in targets {
@@ -538,7 +538,8 @@ impl Switch {
                                     body,
                                 );
                                 let transaction = Transaction::new(message);
-                                let targets = self.table.borrow().get_copy(&address, 3);
+                                let targets =
+                                    self.table.borrow().get_copy(&address, self.replication);
                                 for node in targets {
                                     let e = self.handler.send(transaction.to_wire(), node);
                                     if e.is_err() {
@@ -567,7 +568,8 @@ impl Switch {
                                 log::info!("sending new message");
                                 log::trace!("transaction: {:?}", t);
                                 // TODO: number of targets
-                                let targets = self.table.borrow().get_copy(&t.target(), 5);
+                                let targets =
+                                    self.table.borrow().get_copy(&t.target(), self.replication);
                                 log::trace!("found following targets: {:?}", targets);
                                 // on tcp fail update the RT (and fail the sending?)
                                 for node in targets {
@@ -603,7 +605,8 @@ impl Switch {
                                         body,
                                     );
                                     let transaction = Transaction::new(message);
-                                    let targets = self.table.borrow().get_copy(&address, 3);
+                                    let targets =
+                                        self.table.borrow().get_copy(&address, self.replication);
                                     for node in targets {
                                         let e = self.handler.send(transaction.to_wire(), node);
                                         if e.is_err() {

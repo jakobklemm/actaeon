@@ -33,6 +33,7 @@ pub struct ActionBucket {
 #[derive(Eq, PartialEq)]
 pub enum Type {
     Ping,
+    Lookup,
 }
 
 impl Signaling {
@@ -56,6 +57,17 @@ impl Action {
             created: SystemTime::now(),
             last: SystemTime::now(),
             action,
+            target,
+            uuid: Uuid::new_v4(),
+        }
+    }
+
+    // Shorthand function for creating a lookup Action.
+    pub fn lookup(target: Address) -> Self {
+        Self {
+            created: SystemTime::now(),
+            last: SystemTime::now(),
+            action: Type::Lookup,
             target,
             uuid: Uuid::new_v4(),
         }
@@ -99,6 +111,17 @@ impl ActionBucket {
             Err(e) => {
                 log::error!("one of the threads might have crashed: {:?}", e);
             }
+        }
+    }
+
+    pub fn remove(&mut self, uuid: Uuid) {
+        if let Ok(mut actions) = self.actions.lock() {
+            let index = actions.iter().position(|e| e.uuid == uuid);
+            if index.is_none() {
+                actions.remove(index.unwrap());
+            }
+        } else {
+            log::error!("one of the threads might have crashed.");
         }
     }
 }

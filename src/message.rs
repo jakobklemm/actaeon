@@ -103,8 +103,8 @@ impl Body {
 
     /// Returns the bytes currently in the body without changing the
     /// encryption.
-    pub fn as_bytes(self) -> Vec<u8> {
-        self.bytes
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.bytes.clone()
     }
 
     /// Actual body encryption called by the Message::encrypt. It will

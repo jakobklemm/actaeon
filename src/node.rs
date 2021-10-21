@@ -130,6 +130,60 @@ impl Node {
             None => {}
         }
     }
+
+    /// A shorthand for a (mostly useless) empty zero Node with an
+    /// invalid timestamp.
+    pub fn default() -> Node {
+        let bytes = [0; 32];
+        let address = Address::from_bytes(bytes).unwrap();
+        Node {
+            address,
+            link: None,
+            timestamp: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    /// Converts a Node into a sendable Vec.
+    pub fn as_bytes(&self) -> Vec<u8> {
+        match &self.link {
+            Some(link) => {
+                let mut data = self.address.as_bytes().to_vec();
+                data.append(&mut link.as_bytes().to_vec());
+                return data;
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Turns the bytes back into a Node object. Currently this
+    /// function can't fail, if the given data is invalid the default
+    /// (empty) Node gets returned.
+    pub fn from_bytes(mut bytes: Vec<u8>) -> Node {
+        if bytes.len() < 32 {
+            Node::default()
+        } else if bytes.len() == 32 {
+            let mut data = [0; 32];
+            for (i, j) in bytes.iter().enumerate() {
+                data[i] = *j;
+            }
+            let address = Address::from_bytes(data).unwrap();
+            Node::new(address, None)
+        } else {
+            let mut data = [0; 32];
+            for (i, j) in bytes.iter().enumerate() {
+                data[i] = *j;
+            }
+            let address = Address::from_bytes(data).unwrap();
+            let link_bytes = bytes.split_off(32);
+            match Link::from_bytes(link_bytes) {
+                Ok(link) => Node::new(address, Some(link)),
+                Err(e) => {
+                    log::warn!("unable to parse link data: {}", e);
+                    Node::default()
+                }
+            }
+        }
+    }
 }
 
 impl Ord for Node {
@@ -195,7 +249,7 @@ impl Address {
     /// over the network, this function can be used, although it might
     /// fail if the key is invalid. Mostly the same as from_bytes/1
     /// but only takes a reference.
-    pub fn from_slice(bytes: &[u8; 32]) -> Result<Self, Error> {
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
         if let Some(public) = PublicKey::from_slice(bytes) {
             Ok(Self { key: public })
         } else {
@@ -251,6 +305,25 @@ impl BitXor for Address {
     /// instead of pointers the conversion is done only once and a new
     /// array is returned as well.
     fn bitxor(self, rhs: Self) -> Self::Output {
+        let mut bytes: [u8; 32] = [0; 32];
+        let source = rhs.as_bytes();
+        let target = self.as_bytes();
+        for i in 0..31 {
+            bytes[i] = target[i] ^ source[i];
+        }
+        return bytes;
+    }
+}
+
+impl BitXor for &Address {
+    type Output = [u8; 32];
+
+    /// Instead of a custom "distance method" the XOR operation itself
+    /// is implemented on addresses. This makes it easier to use in
+    /// any situation. Since as_bytes/0 currently returns new bytes
+    /// instead of pointers the conversion is done only once and a new
+    /// array is returned as well.
+    fn bitxor(self, rhs: &Address) -> Self::Output {
         let mut bytes: [u8; 32] = [0; 32];
         let source = rhs.as_bytes();
         let target = self.as_bytes();
