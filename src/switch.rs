@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::interface::Interface;
 use crate::message::Message;
-use crate::node::{Address, Center, Link, Node};
+use crate::node::{Address, Center, Node};
 use crate::router::Table;
 use crate::signaling::{Action, ActionBucket};
 use crate::tcp::Handler;
@@ -202,6 +202,7 @@ impl Switch {
 
     pub fn start(mut self) -> Result<(), Error> {
         thread::spawn(move || loop {
+            // TODO: Add auto bootstrap (if enabled?)
             // tcp messages
             match self.handler.read() {
                 Some(wire) => {
@@ -228,6 +229,7 @@ impl Switch {
                                         }
                                     }
                                 }
+
                                 // 3. Add the target node to the RT,
                                 // but only if its not the Center.
                                 if &target == &self.center.public {
@@ -239,6 +241,7 @@ impl Switch {
                                             // TODO: Add signaling lookup
                                         }
                                     }
+
                                     // 4. Handle messages directly for this Node.
                                     // Only some Classes can
                                     // reasonably be sent to a Node
@@ -409,14 +412,25 @@ impl Switch {
                                         // details have to be provided
                                         // in the body.
                                         Class::Bootstrap => {
-                                            let bytes = self.table.borrow().export();
+                                            // 4.5.1 Construct the
+                                            // body data, which
+                                            // consists of the center
+                                            // and the serialized RT.
+                                            let mut data = Node::new(
+                                                self.center.public.clone(),
+                                                Some(self.center.link.clone()),
+                                            )
+                                            .as_bytes();
+                                            data.append(&mut self.table.borrow().export());
+                                            // 4.5.2 Create the Message & Transaction
                                             let message = Message::new(
                                                 Class::Bulk,
                                                 self.center.public.clone(),
                                                 source.clone(),
-                                                bytes,
+                                                data,
                                             );
                                             let transaction = Transaction::new(message);
+                                            // 4.5.3 Deliver the Transaction
                                             let targets = self
                                                 .table
                                                 .borrow()
@@ -434,6 +448,9 @@ impl Switch {
                                             }
                                         }
 
+                                        // 4.6 Return of a Bootstrap request, containts
+                                        // the used signaling node &
+                                        // its entire RT in the Message Body.
                                         Class::Bulk => {
                                             t.message
                                                 .body
@@ -463,6 +480,10 @@ impl Switch {
                                                 });
                                         }
 
+                                        // 4.7 Messages going from a user to the provider.
+                                        Class::Record => {}
+
+                                        // 4.8 Messages from a provider to the subscribers.
                                         Class::Action => {
                                             match self.topics.borrow().find(&target) {
                                                 Some(topic) => {

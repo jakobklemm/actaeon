@@ -398,19 +398,24 @@ impl Link {
 
     /// Exports the link details to bytes that can be sent over the
     /// wire. Structure:
-    /// Address data,
+    /// Link Length: 1 byte
+    /// IP Address data,
     /// Last 8 bytes: Port number
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut data = Vec::new();
+        let mut data = vec![0];
         let address = self.ip.as_bytes();
         let port = self.port.to_le_bytes();
         data.append(&mut address.to_vec());
         data.append(&mut port.to_vec());
+        let len = data.len() as u8;
+        let first = data.first_mut().unwrap();
+        *first = len;
         return data;
     }
 
     pub fn from_bytes(mut data: Vec<u8>) -> Result<Link, Error> {
         data.reverse();
+        data.pop();
         let mut address = data.split_off(8);
         data.reverse();
         address.reverse();
