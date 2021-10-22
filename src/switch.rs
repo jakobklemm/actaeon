@@ -1378,6 +1378,3 @@ mod tests {
         Center::new(s, String::from(""), 8080)
     }
 }
-       Q3      °œtS.V  ÕY.V   ýÒY.V  Content-Length: 13071
-
-{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///home/jeykey/workspace/actaeon/src/switch.rs","version":12},"contentChanges":
