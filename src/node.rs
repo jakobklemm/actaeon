@@ -261,6 +261,20 @@ impl Address {
         }
     }
 
+    /// Convert an array of bytes into an array of Addresses. Any
+    /// invalid ones will be dropped.
+    pub fn from_bulk(data: Vec<u8>) -> Vec<Address> {
+        let mut ret = Vec::new();
+        data.chunks_exact(32)
+            .for_each(|x| match Address::from_slice(x) {
+                Ok(address) => ret.push(address),
+                Err(e) => {
+                    log::warn!("received invalid Addres data: {:?}", e);
+                }
+            });
+        return ret;
+    }
+
     /// Returns an array of bytes of the public key / address.
     /// Currently it does not return a slice or reference to the
     /// bytes, instead it creates a new array. This should make it

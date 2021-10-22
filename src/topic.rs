@@ -99,9 +99,10 @@ impl Topic {
                         return Some(t);
                     }
                     Command::System(action) => match action {
-                        SystemAction::Subscribe(a) => {
-                            self.subscribers.add(a);
+                        SystemAction::Subscriber(a) => {
+                            self.subscribers.add_bulk(a);
                         }
+                        SystemAction::Subscribe(_topic) => {}
                         SystemAction::Unsubscribe(a) => {
                             let _ = self.subscribers.remove(&a);
                         }
@@ -131,9 +132,10 @@ impl Topic {
                         return Some(t);
                     }
                     Command::System(action) => match action {
-                        SystemAction::Subscribe(a) => {
-                            self.subscribers.add(a);
+                        SystemAction::Subscriber(a) => {
+                            self.subscribers.add_bulk(a);
                         }
+                        SystemAction::Subscribe(_t) => {}
                         SystemAction::Unsubscribe(a) => {
                             let _ = self.subscribers.remove(&a);
                         }
@@ -164,7 +166,7 @@ impl Topic {
             match self.channel.try_recv() {
                 Some(m) => match m {
                     Command::System(action) => match action {
-                        SystemAction::Subscribe(a) => self.subscribers.add(a),
+                        SystemAction::Subscriber(a) => self.subscribers.add_bulk(a),
                         SystemAction::Unsubscribe(a) => self.subscribers.remove(&a),
                         _ => continue,
                     },
@@ -196,7 +198,7 @@ impl Topic {
             match self.channel.try_recv() {
                 Some(m) => match m {
                     Command::System(action) => match action {
-                        SystemAction::Subscribe(a) => self.subscribers.add(a),
+                        SystemAction::Subscriber(a) => self.subscribers.add_bulk(a),
                         SystemAction::Unsubscribe(a) => self.subscribers.remove(&a),
                         _ => continue,
                     },
@@ -264,6 +266,11 @@ impl SubscriberBucket {
             }
             None => {}
         }
+    }
+
+    /// Shorthand function for adding many Subscribers at once.
+    pub fn add_bulk(&mut self, data: Vec<Address>) {
+        data.iter().for_each(|x| self.add(x.clone()));
     }
 }
 

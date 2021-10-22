@@ -14,6 +14,7 @@ use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
 use crate::signaling::{Action, ActionBucket};
 use crate::tcp::Handler;
+use crate::topic::Topic;
 use crate::topic::{Record, RecordBucket, TopicBucket};
 use crate::transaction::{Class, Transaction};
 use std::cell::RefCell;
@@ -55,8 +56,16 @@ pub enum SwitchAction {
 }
 
 pub enum SystemAction {
-    Subscribe(Address),
+    /// A new topic gets created on the user thread, the channel has
+    /// to be sent to the handler thread.
+    Subscribe(Topic),
+    /// Usually coming from the Thread to the user informing them of
+    /// a new subscriber.
+    Subscriber(Vec<Address>),
+    /// Removes the topic from the tables & distributes the update.
     Unsubscribe(Address),
+    /// Almost the same as UserAction, but in the topic the center
+    /// might be unknown, so just the body can be transfered.
     Send(Address, Vec<u8>),
 }
 
@@ -561,37 +570,37 @@ impl Switch {
                                         // to a given topic.
                                         // Source = The topic,
                                         // Target = Center,
-                                        // Body = Subscriber,
+                                        // Body = List of all subscribers,
+                                        // TODO: Add dedicated fetch subscribers Classes to limit bandwidth
                                         Class::Subscriber => {
                                             // 4.8.1 Parse the body
-                                            let addr =
-                                                Address::from_slice(&t.message.body.as_bytes())
-                                                    .unwrap();
                                             match self.topics.borrow_mut().find_mut(&source) {
-                                                Some(t) => {
+                                                Some(topic) => {
                                                     // 4.8.2 Send a subscribe message to the user thread.
-                                                    let command = Command::System(
-                                                        SystemAction::Subscribe(addr.clone()),
+                                                    let subs = Address::from_bulk(
+                                                        t.message.body.as_bytes(),
                                                     );
-                                                    let e = t.channel.send(command);
+                                                    let command = Command::System(
+                                                        SystemAction::Subscriber(subs.clone()),
+                                                    );
+                                                    let e = topic.channel.send(command);
                                                     if e.is_err() {
                                                         // 4.8.3 If the sending isn't successful the topic was dropped.
                                                         // That means a Unsubscribe
                                                         // message has
                                                         // to be distributed.
-                                                        log::error!("channel unavailable, the topic: {:?} might not be in scope anymore: {}", addr, e.unwrap_err());
-
+                                                        log::warn!("channel unavailable, the topic: {:?} might not be in scope anymore: {}", topic.address, e.unwrap_err());
                                                         let message = Message::new(
                                                             Class::Unsubscribe,
                                                             self.center.public.clone(),
-                                                            t.address.clone(),
+                                                            topic.address.clone(),
                                                             Vec::new(),
                                                         );
                                                         let transaction = Transaction::new(message);
-                                                        let targets = self
-                                                            .table
-                                                            .borrow()
-                                                            .get_copy(&t.address, self.replication);
+                                                        let targets = self.table.borrow().get_copy(
+                                                            &topic.address,
+                                                            self.replication,
+                                                        );
                                                         for node in targets {
                                                             let target = node.address.clone();
                                                             let e = self
@@ -607,7 +616,7 @@ impl Switch {
                                                             }
                                                         }
                                                     } else {
-                                                        t.subscribers.add(addr)
+                                                        topic.subscribers.add_bulk(subs)
                                                     }
                                                 }
                                                 None => {}
@@ -663,7 +672,9 @@ impl Switch {
                                                                 t.subscribers.remove(&addr)
                                                             }
                                                         }
-                                                        None => {}
+                                                        None => {
+                                                            // No topic = nothing to unsubscribe from.
+                                                        }
                                                     }
                                                 }
                                                 Err(e) => {
@@ -727,7 +738,9 @@ impl Switch {
                                     // - Ping, Pong, Lookup, Bulk, Subscriber, Unsubscriber, Action,
                                     // Handle:
                                     // - Record, Subscribe, Unsubscribe
+
                                     match t.class() {
+                                        // 5.1 Message coming from a User to the Provider
                                         Class::Record => {
                                             if self.table.borrow().should_be_local(&target) {
                                                 // 5.1 Record is / should be local. (If no record exists
@@ -811,164 +824,171 @@ impl Switch {
                                         // Target = Record / Topic
                                         Class::Subscribe => {
                                             if self.table.borrow().should_be_local(&target) {
-                                                if self.table.borrow().should_be_local(&target) {
-                                                    // 5.2.1 Record is / should be local. (If no record exists
-                                                    // currently one will
-                                                    // be created.)
-                                                    match self
-                                                        .records
-                                                        .borrow_mut()
-                                                        .find_mut(&target)
-                                                    {
-                                                        Some(record) => {
-                                                            // 5.1.1 Record already exists in the table
-                                                            record.subscribers.add(t.source());
-                                                            for sub in record.subscribers.clone() {
-                                                                let targets =
-                                                                    self.table.borrow().get_copy(
-                                                                        &sub,
-                                                                        self.replication,
-                                                                    );
-                                                                for node in targets {
-                                                                    let target =
-                                                                        node.address.clone();
-                                                                    let message = Message::new(
-                                                                        Class::Subscriber,
-                                                                        record.address.clone(),
-                                                                        t.source(),
-                                                                        Vec::new(),
-                                                                    );
-                                                                    let transaction =
-                                                                        Transaction::new(message);
-                                                                    let e = self.handler.send(
-                                                                        transaction.to_wire(),
-                                                                        node,
-                                                                    );
-                                                                    if e.is_err() {
-                                                                        log::warn!(
+                                                // 5.2.1 Record is / should be local. (If no record exists
+                                                // currently one will
+                                                // be created.)
+                                                match self.records.borrow_mut().find_mut(&target) {
+                                                    Some(record) => {
+                                                        // 5.1.1 Record already exists in the table
+                                                        record.subscribers.add(t.source());
+                                                        for sub in record.subscribers.clone() {
+                                                            let targets = self
+                                                                .table
+                                                                .borrow()
+                                                                .get_copy(&sub, self.replication);
+                                                            for node in targets {
+                                                                let target = node.address.clone();
+                                                                let mut subs = Vec::new();
+                                                                record
+                                                                    .subscribers
+                                                                    .clone()
+                                                                    .into_iter()
+                                                                    .for_each(|x| {
+                                                                        subs.append(
+                                                                            &mut x
+                                                                                .as_bytes()
+                                                                                .to_vec(),
+                                                                        )
+                                                                    });
+                                                                let message = Message::new(
+                                                                    Class::Subscriber,
+                                                                    record.address.clone(),
+                                                                    t.source(),
+                                                                    subs,
+                                                                );
+                                                                let transaction =
+                                                                    Transaction::new(message);
+                                                                let e = self.handler.send(
+                                                                    transaction.to_wire(),
+                                                                    node,
+                                                                );
+                                                                if e.is_err() {
+                                                                    log::warn!(
                                                                 "unable to reach node: {:?}, {}",
                                                                 target,
                                                                 e.unwrap_err()
                                                             );
-                                                                        self.table
-                                                                            .borrow_mut()
-                                                                            .status(&source, false);
-                                                                        let action =
-                                                                            Action::lookup(target);
-                                                                        self.queue.add(action);
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        None => {
-                                                            // 5.1.2 If no record exists it gets created and the same steps take place.
-                                                            let record =
-                                                                Record::new(t.target(), t.source());
-                                                            self.records
-                                                                .borrow_mut()
-                                                                .add(record.clone());
-                                                            match self
-                                                                .records
-                                                                .borrow_mut()
-                                                                .find_mut(&t.target())
-                                                            {
-                                                                Some(record) => {
-                                                                    // 5.1.1 Record already exists in the table
-                                                                    record
-                                                                        .subscribers
-                                                                        .add(t.source());
-                                                                    for sub in
-                                                                        record.subscribers.clone()
-                                                                    {
-                                                                        let targets = self
-                                                                            .table
-                                                                            .borrow()
-                                                                            .get_copy(
-                                                                                &sub,
-                                                                                self.replication,
-                                                                            );
-                                                                        for node in targets {
-                                                                            let target = node
-                                                                                .address
-                                                                                .clone();
-                                                                            let message = Message::new(
-                                                                        Class::Subscriber,
-                                                                        record.address.clone(),
-                                                                        t.source(),
-                                                                        Vec::new(),
-                                                                    );
-                                                                            let transaction =
-                                                                                Transaction::new(
-                                                                                    message,
-                                                                                );
-                                                                            let e =
-                                                                                self.handler.send(
-                                                                                    transaction
-                                                                                        .to_wire(),
-                                                                                    node,
-                                                                                );
-                                                                            if e.is_err() {
-                                                                                log::warn!(
-                                                                "unable to reach node: {:?}, {}",
-                                                                target,
-                                                                e.unwrap_err()
-                                                            );
-                                                                                self.table
-                                                                                    .borrow_mut()
-                                                                                    .status(
-                                                                                        &source,
-                                                                                        false,
-                                                                                    );
-                                                                                let action =
-                                                                                    Action::lookup(
-                                                                                        target,
-                                                                                    );
-                                                                                self.queue
-                                                                                    .add(action);
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-                                                                None => {
-                                                                    log::error!(
-                                                                        "internal record error!"
-                                                                    );
+                                                                    self.table
+                                                                        .borrow_mut()
+                                                                        .status(&source, false);
+                                                                    let action =
+                                                                        Action::lookup(target);
+                                                                    self.queue.add(action);
                                                                 }
                                                             }
                                                         }
                                                     }
-                                                } else {
-                                                    // 5.1.4 If the message should't be local simply redirect it.
-                                                    let target = t.target();
-                                                    let targets = self
-                                                        .table
-                                                        .borrow()
-                                                        .get_copy(&target, self.replication);
-                                                    for node in targets {
-                                                        let e =
-                                                            self.handler.send(t.to_wire(), node);
-                                                        if e.is_err() {
-                                                            log::warn!(
+                                                    None => {
+                                                        // 5.1.2 If no record exists it gets created and the same steps take place.
+                                                        let record =
+                                                            Record::new(t.target(), t.source());
+                                                        self.records
+                                                            .borrow_mut()
+                                                            .add(record.clone());
+                                                        match self
+                                                            .records
+                                                            .borrow_mut()
+                                                            .find_mut(&t.target())
+                                                        {
+                                                            Some(record) => {
+                                                                // 5.1.1 Record already exists in the table
+                                                                record.subscribers.add(t.source());
+                                                                for sub in
+                                                                    record.subscribers.clone()
+                                                                {
+                                                                    let targets = self
+                                                                        .table
+                                                                        .borrow()
+                                                                        .get_copy(
+                                                                            &sub,
+                                                                            self.replication,
+                                                                        );
+                                                                    for node in targets {
+                                                                        let target =
+                                                                            node.address.clone();
+                                                                        let message = Message::new(
+                                                                            Class::Subscriber,
+                                                                            record.address.clone(),
+                                                                            t.source(),
+                                                                            Vec::new(),
+                                                                        );
+                                                                        let transaction =
+                                                                            Transaction::new(
+                                                                                message,
+                                                                            );
+                                                                        let e = self.handler.send(
+                                                                            transaction.to_wire(),
+                                                                            node,
+                                                                        );
+                                                                        if e.is_err() {
+                                                                            log::warn!(
                                                                 "unable to reach node: {:?}, {}",
-                                                                target.clone(),
+                                                                target,
                                                                 e.unwrap_err()
                                                             );
-                                                            self.table
-                                                                .borrow_mut()
-                                                                .status(&source, false);
-                                                            let action =
-                                                                Action::lookup(target.clone());
-                                                            self.queue.add(action);
+                                                                            self.table
+                                                                                .borrow_mut()
+                                                                                .status(
+                                                                                    &source, false,
+                                                                                );
+                                                                            // TODO: Add queue &
+                                                                            // status
+                                                                            // updates
+                                                                            // to
+                                                                            // TCP
+                                                                            // /
+                                                                            // Handler
+                                                                            // directly
+                                                                            // to
+                                                                            // reduce
+                                                                            // complexity.
+                                                                            let action =
+                                                                                Action::lookup(
+                                                                                    target,
+                                                                                );
+                                                                            self.queue.add(action);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            None => {
+                                                                log::error!(
+                                                                    "internal record error!"
+                                                                );
+                                                            }
                                                         }
+                                                    }
+                                                }
+                                            } else {
+                                                // 5.1.4 If the message should't be local simply redirect it.
+                                                let target = t.target();
+                                                let targets = self
+                                                    .table
+                                                    .borrow()
+                                                    .get_copy(&target, self.replication);
+                                                for node in targets {
+                                                    let e = self.handler.send(t.to_wire(), node);
+                                                    if e.is_err() {
+                                                        log::warn!(
+                                                            "unable to reach node: {:?}, {}",
+                                                            target.clone(),
+                                                            e.unwrap_err()
+                                                        );
+                                                        self.table
+                                                            .borrow_mut()
+                                                            .status(&source, false);
+                                                        let action = Action::lookup(target.clone());
+                                                        self.queue.add(action);
                                                     }
                                                 }
                                             }
                                         }
 
+                                        // 5.3 Inverse of Subscribe
                                         Class::Unsubscribe => {
                                             if self.table.borrow().should_be_local(&target) {
                                                 if self.table.borrow().should_be_local(&target) {
-                                                    // 5.2.1 Record is / should be local. (If no record exists
+                                                    // 5.3.1 Record is / should be local. (If no record exists
                                                     // currently one will
                                                     // be created.)
                                                     match self
@@ -977,7 +997,7 @@ impl Switch {
                                                         .find_mut(&target)
                                                     {
                                                         Some(record) => {
-                                                            // 5.1.1 Record already exists in the table
+                                                            // 5.3.1 Record already exists in the table
                                                             record.subscribers.remove(&t.source());
                                                             for sub in record.subscribers.clone() {
                                                                 let targets =
@@ -1017,12 +1037,12 @@ impl Switch {
                                                             }
                                                         }
                                                         None => {
-                                                            // 5.1.2 If no record exists nothing happens, unsubscribing not possible.
+                                                            // 5.3.2 If no record exists nothing happens, unsubscribing not possible.
                                                         }
                                                     }
                                                 }
                                             } else {
-                                                // 5.1.4 If the message should't be local simply redirect it.
+                                                // 5.3.4 If the message should't be local simply redirect it.
                                                 let target = t.target();
                                                 let targets = self
                                                     .table
@@ -1045,7 +1065,28 @@ impl Switch {
                                                 }
                                             }
                                         }
-                                        _ => {}
+                                        // 5.4 Any other type of message simply gets forwarded
+                                        // without any changes.
+                                        _ => {
+                                            let target = t.target();
+                                            let targets = self
+                                                .table
+                                                .borrow()
+                                                .get_copy(&target, self.replication);
+                                            for node in targets {
+                                                let e = self.handler.send(t.to_wire(), node);
+                                                if e.is_err() {
+                                                    log::warn!(
+                                                        "unable to reach node: {:?}, {}",
+                                                        target.clone(),
+                                                        e.unwrap_err()
+                                                    );
+                                                    self.table.borrow_mut().status(&source, false);
+                                                    let action = Action::lookup(target.clone());
+                                                    self.queue.add(action);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1056,13 +1097,18 @@ impl Switch {
                         // be disregarded.
                     }
                 }
-                None => {}
+                None => {
+                    // If the parsing fails nothing can really be done.
+                    log::warn!("received invalid message!");
+                }
             }
 
-            // 5.1 The User can send messages directly without the PubSub system.
+            // 6. The User can send messages directly without the
+            // PubSub system. => Interface Channel
             match self.channel.try_recv() {
                 Some(data) => {
                     match data {
+                        // 6.1 User messages (unkown reasons, not the recommended usage).
                         Command::User(t) => {
                             log::info!("sending new message to: {:?}", t.target());
                             let targets =
@@ -1083,27 +1129,67 @@ impl Switch {
                             }
                         }
 
+                        // 6.2 Commands from the user
                         Command::Switch(action) => match action {
+                            // 6.2.1 Terminate this Thread.
                             SwitchAction::Terminate => {
                                 log::info!("terminating handler thread");
                                 break;
                             }
+
+                            // 6.2.2 Empty the thread (currently not really useful)
                             SwitchAction::Cache => {
                                 log::info!("emptied the handler cache");
                                 self.cache.borrow_mut().empty();
                             }
                         },
 
+                        // 6.3 Actions issued by the user.
                         Command::System(action) => match action {
-                            SystemAction::Subscribe(_) => {
-                                log::warn!("unable to process event without topic");
+                            // 6.3.1 No use case for a subscriber without topic.
+                            SystemAction::Subscriber(address) => {
+                                log::warn!(
+                                    "unable to handle subscribe request: {:?} without Topic",
+                                    address
+                                );
                             }
-                            SystemAction::Unsubscribe(_) => {
-                                log::warn!("unable to process event without topic");
+                            // 6.3.2 A new Topic was subscribed to on the user thread.
+                            SystemAction::Subscribe(topic) => {
+                                let target = topic.address.clone();
+                                self.topics.borrow_mut().add(topic);
+                                let message = Message::new(
+                                    Class::Subscribe,
+                                    self.center.public.clone(),
+                                    target.clone(),
+                                    Vec::new(),
+                                );
+                                let transaction = Transaction::new(message);
+                                let targets =
+                                    self.table.borrow().get_copy(&target, self.replication);
+                                for node in targets {
+                                    let target = node.address.clone();
+                                    let e = self.handler.send(transaction.to_wire(), node);
+                                    if e.is_err() {
+                                        log::warn!(
+                                            "unable to reach node: {:?}, {}",
+                                            target,
+                                            e.unwrap_err()
+                                        );
+                                        self.table.borrow_mut().status(&target, false);
+                                        let action = Action::lookup(target);
+                                        self.queue.add(action);
+                                    }
+                                }
+                            }
+                            SystemAction::Unsubscribe(address) => {
+                                log::warn!(
+                                    "unable to handle unsubscribe request: {:?} without Topic",
+                                    address
+                                );
                             }
                             SystemAction::Send(address, body) => {
                                 let message = Message::new(
-                                    Class::Action,
+                                    Class::Record,
                                     self.center.clone().public,
                                     address.clone(),
                                     body,
@@ -1112,15 +1198,17 @@ impl Switch {
                                 let targets =
                                     self.table.borrow().get_copy(&address, self.replication);
                                 for node in targets {
+                                    let target = node.address.clone();
                                     let e = self.handler.send(transaction.to_wire(), node);
                                     if e.is_err() {
-                                        log::error!("unable to connect to node");
-                                        // TODO: Update table and
-                                        // deactivate the node,
-                                        // reschedule for reattemtp.
-                                        self.table.borrow_mut().status(&address, false);
-                                    } else {
-                                        self.table.borrow_mut().status(&address, true);
+                                        log::warn!(
+                                            "unable to reach node: {:?}, {}",
+                                            target,
+                                            e.unwrap_err()
+                                        );
+                                        self.table.borrow_mut().status(&target, false);
+                                        let action = Action::lookup(target);
+                                        self.queue.add(action);
                                     }
                                 }
                             }
@@ -1130,41 +1218,23 @@ impl Switch {
                 None => {}
             }
 
-            // topic messages
+            // 7. Loop over each topics channels messages, acto on
+            // them. This only really covers the System case, since
+            // there is no reason to use the other options in the
+            // Topic context.
             for topic in &self.topics.borrow().topics {
                 match topic.channel.try_recv() {
                     Some(data) => {
                         match data {
-                            Command::User(t) => {
-                                log::info!("sending new message");
-                                log::trace!("transaction: {:?}", t);
-                                // TODO: number of targets
-                                let targets =
-                                    self.table.borrow().get_copy(&t.target(), self.replication);
-                                log::trace!("found following targets: {:?}", targets);
-                                // on tcp fail update the RT (and fail the sending?)
-                                for node in targets {
-                                    // TODO: handle errors
-                                    let e = self.handler.send(t.to_wire(), node);
-                                    if e.is_err() {
-                                        log::error!("tcp handler failed: {:?}", e);
-                                    }
-                                }
-                            }
-                            Command::Switch(action) => match action {
-                                SwitchAction::Terminate => {
-                                    log::info!("terminating handler thread");
-                                    break;
-                                }
-                                SwitchAction::Cache => {
-                                    log::info!("emptied the handler cache");
-                                    self.cache.borrow_mut().empty();
-                                }
-                            },
                             Command::System(action) => match action {
+                                // 7.
                                 SystemAction::Subscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
+                                SystemAction::Subscriber(_address) => {
+                                    log::warn!("unable to process event without topic");
+                                }
+
                                 SystemAction::Unsubscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
@@ -1179,16 +1249,24 @@ impl Switch {
                                     let targets =
                                         self.table.borrow().get_copy(&address, self.replication);
                                     for node in targets {
+                                        let target = node.address.clone();
                                         let e = self.handler.send(transaction.to_wire(), node);
                                         if e.is_err() {
-                                            log::error!("unable to connect to node");
-                                            // TODO: Update table and
-                                            // deactivate the node,
-                                            // reschedule for reattemtp.
+                                            log::warn!(
+                                                "unable to reach node: {:?}, {}",
+                                                target,
+                                                e.unwrap_err()
+                                            );
+                                            self.table.borrow_mut().status(&target, false);
+                                            let action = Action::lookup(target);
+                                            self.queue.add(action);
                                         }
                                     }
                                 }
                             },
+                            _ => {
+                                log::warn!("unable to process request in topic context");
+                            }
                         }
                     }
                     None => {}

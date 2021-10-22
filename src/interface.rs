@@ -2,14 +2,12 @@
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::message::Message;
 use crate::node::Address;
 use crate::node::Center;
 use crate::signaling::{ActionBucket, Signaling};
 use crate::switch::Channel;
 use crate::switch::{Command, SwitchAction, SystemAction};
 use crate::topic::Topic;
-use crate::transaction::Class;
 use crate::transaction::Transaction;
 
 /// Starting the switch will create both Interface and Switch objects.
@@ -22,7 +20,7 @@ pub struct Interface {
     channel: Channel,
     signaling: Signaling,
     /// Center used for getting message origins.
-    center: Center,
+    pub center: Center,
 }
 
 impl Interface {
@@ -73,46 +71,28 @@ impl Interface {
         }
     }
 
-    pub fn send(&self, m: Message) -> Result<(), Error> {
-        let transaction = Transaction::new(m);
-        self.channel.send(Command::User(transaction))?;
-        Ok(())
+    /// Unless there is a good reason to do otherwise, the Message
+    /// Class should always be Record.
+    pub fn send(&self, transaction: Transaction) -> Result<(), Error> {
+        self.channel.send(Command::User(transaction))
     }
 
     pub fn subscribe(&self, address: Address) -> Result<Topic, Error> {
         let (c1, c2) = Channel::new();
         let local = Topic::new(address.clone(), c1, Vec::new());
         let remote = Topic::new(address.clone(), c2, Vec::new());
-        match self
+        let e = self
             .channel
-            .send(Command::System(SystemAction::Subscribe(remote.address())))
-        {
-            Ok(()) => {
-                let message = Message::new(
-                    Class::Subscribe,
-                    self.center.public.clone(),
-                    address,
-                    Vec::new(),
-                );
-                let transaction = Transaction::new(message);
+            .send(Command::System(SystemAction::Subscribe(remote)));
 
-                let e = self.channel.send(Command::User(transaction));
-                if e.is_err() {
-                    log::error!("handler thread failed: {:?}", e);
-                    // TODO: Add restart function.
-                    return Err(Error::Connection(String::from(
-                        "handler thread not responding",
-                    )));
-                }
-            }
-            Err(e) => {
-                log::error!("handler thread failed: {:?}", e);
-                return Err(Error::Connection(String::from(
-                    "handler thread not responding",
-                )));
-            }
+        if e.is_err() {
+            log::error!("handler thread failed: {:?}", e.unwrap());
+            return Err(Error::Connection(String::from(
+                "handler thread not responding",
+            )));
+        } else {
+            return Ok(local);
         }
-        Ok(local)
     }
 
     pub fn terminate(&self) {
