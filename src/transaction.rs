@@ -83,6 +83,10 @@ pub enum Class {
     Subscribe,
     /// Opposite of Subscribe.
     Unsubscribe,
+    /// Informs subscribers about a new one.
+    Subscriber,
+    /// Informs subscribers about a unsubscribe message.
+    Unsubscriber,
 }
 
 impl Transaction {
@@ -221,6 +225,8 @@ impl Class {
             [0, 0, 1, 3] => Ok(Self::Bulk),
             [0, 1, 0, 0] => Ok(Self::Subscribe),
             [0, 1, 0, 1] => Ok(Self::Unsubscribe),
+            [0, 1, 0, 2] => Ok(Self::Subscriber),
+            [0, 1, 0, 3] => Ok(Self::Unsubscriber),
             [1, 0, 0, 0] => Ok(Self::Record),
             [1, 0, 0, 1] => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
@@ -241,6 +247,8 @@ impl Class {
             Self::Bulk => [0, 0, 1, 4],
             Self::Subscribe => [0, 1, 0, 0],
             Self::Unsubscribe => [0, 1, 0, 1],
+            Self::Subscriber => [0, 1, 0, 2],
+            Self::Unsubscriber => [0, 1, 0, 3],
             Self::Record => [1, 0, 0, 0],
             Self::Action => [1, 0, 0, 1],
         }

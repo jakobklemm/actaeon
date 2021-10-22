@@ -151,7 +151,11 @@ impl Node {
                 data.append(&mut link.as_bytes().to_vec());
                 return data;
             }
-            None => Vec::new(),
+            None => {
+                let mut data = self.address.as_bytes().to_vec();
+                data.push(0);
+                return data;
+            }
         }
     }
 
@@ -515,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_link_serialize() {
-        let l = Link::new(String::from("127.0.0.1"), 42);
+        let l = Link::new(String::from("127.0.0.1"), 12345);
         let b = l.as_bytes();
         let c = Link::from_bytes(b).unwrap();
         assert_eq!(l, c);

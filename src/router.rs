@@ -117,9 +117,17 @@ impl Table {
     /// Nodes on the "far" side, but the structure of the Table will
     /// get changed for "near" nodes. If the new Node belongs into an
     /// Element at maximum capacity it will get split into two new
-    /// Leaves.
+    /// Leaves. If the Node already exists in the table nothing will
+    /// change except for the Link details.
     pub fn add(&mut self, node: Node) {
-        self.root.add(node, &self.center);
+        match self.find_mut(&node.address) {
+            Some(found) => {
+                found.link = node.link;
+            }
+            None => {
+                self.root.add(node, &self.center);
+            }
+        }
     }
 
     /// Opposite of "try_add", will remove a Node with the matching

@@ -38,4 +38,6 @@ modular system has to be implemented.
 | Automatic Message        | Message for this node but handled internally.              |
 | Handler thread / process | Dedicated thread for receiving messages.                   |
 | Center                   | Self / this, local node.                                   |
+| Provider                 | Location of the PubSub entry                               |
+|                          |                                                            |
 

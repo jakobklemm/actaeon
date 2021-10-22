@@ -191,7 +191,7 @@ impl Topic {
     /// implementation, currently a manual "unsubscribe" function is
     /// required to inform other users about the change. It simply
     /// sends an Unsubscribe action to each subscriber.
-    pub fn unsubscriibe(&mut self) {
+    pub fn unsubscribe(&mut self) {
         loop {
             match self.channel.try_recv() {
                 Some(m) => match m {
@@ -327,6 +327,15 @@ impl TopicBucket {
 
     pub fn len(&self) -> usize {
         self.topics.len()
+    }
+}
+
+impl Record {
+    pub fn new(address: Address, initial: Address) -> Self {
+        Self {
+            address,
+            subscribers: SubscriberBucket::new(vec![initial]),
+        }
     }
 }
 
