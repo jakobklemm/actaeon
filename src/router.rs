@@ -174,11 +174,9 @@ impl Table {
     pub fn get_copy(&self, address: &Address, limit: usize) -> Vec<Node> {
         let mut nodes = Vec::new();
         let refs = self.get(address, limit);
-
         for n in refs {
             nodes.push(n.clone());
         }
-
         return nodes;
     }
 

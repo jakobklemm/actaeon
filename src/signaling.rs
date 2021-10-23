@@ -3,17 +3,24 @@
 //! Responsible for Kademlia background tasks and bootstrapping the
 //! Instance.
 
+use crate::config::Config;
+use crate::message::Message;
 use crate::node::Address;
+use crate::tcp::Handler;
+use crate::transaction::{Class, Transaction};
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use std::time::SystemTime;
 use uuid::Uuid;
 
-#[derive(Clone)]
 pub struct Signaling {
-    servers: Vec<String>,
+    server: String,
+    port: usize,
     pub queue: ActionBucket,
+    last: SystemTime,
+    handler: Handler,
 }
 
 #[derive(Eq, PartialEq)]
@@ -37,15 +44,27 @@ pub enum Type {
 }
 
 impl Signaling {
-    pub fn new(servers: Vec<String>, queue: ActionBucket) -> Self {
-        Self { servers, queue }
+    pub fn new(config: Config, handler: Handler, queue: ActionBucket) -> Self {
+        Self {
+            server: config.signaling,
+            port: config.port,
+            queue,
+            last: SystemTime::now(),
+            handler,
+        }
     }
 
-    pub fn start(self) {
+    pub fn start(mut self) {
         thread::spawn(move || {
             // TODO: Bootstrapping
             loop {
-                // TODO: Queue processing
+                // Do a action every two minutes.
+                if self.last.elapsed().unwrap() >= Duration::new(120, 0) {
+                    self.last = SystemTime::now();
+                    // select a random node, get the closes few to it,
+                    // look for Link None nodes and perform a lookup
+                    // on them.
+                }
             }
         });
     }

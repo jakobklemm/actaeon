@@ -312,6 +312,16 @@ impl Address {
     pub fn bucket(&self, center: &Center) -> usize {
         (self.as_bytes()[0] ^ center.public.as_bytes()[0]).into()
     }
+
+    /// Generate a random Address (might panic in rare cases, highly
+    /// unlikely).
+    pub fn random() -> Address {
+        let mut bytes = [0; 32];
+        for i in 0..31 {
+            bytes[i] = rand::random::<u8>();
+        }
+        Address::from_bytes(bytes).unwrap()
+    }
 }
 
 impl BitXor for Address {

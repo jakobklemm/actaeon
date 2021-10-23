@@ -40,4 +40,8 @@ modular system has to be implemented.
 | Center                   | Self / this, local node.                                   |
 | Provider                 | Location of the PubSub entry                               |
 |                          |                                                            |
+* Issues
+List of known urgent issues.
+- Signaling: The server currently has to be available. -> Replace with
+  Array & make variable to only copy the closest.
 

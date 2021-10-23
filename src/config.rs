@@ -30,7 +30,8 @@ struct Network {
     /// serde deserialization value for the config file.
     bucket: usize,
     /// serde deserialization value for the config file.
-    signaling: Vec<String>,
+    signaling: String,
+    port: usize,
     /// serde deserialization value for the config file.
     cache: usize,
 }
@@ -64,7 +65,9 @@ pub struct Config {
     ///
     /// TODO: Replace String with signaling struct and update toml
     /// file with new string format.
-    pub signaling: Vec<String>,
+    pub signaling: String,
+    /// Port of the signaling server.
+    pub port: usize,
     /// Maximum number of arguments in the Transaction cache in the
     /// Actaeon Process.
     pub cache: usize,
@@ -112,10 +115,11 @@ pub struct CenterConfig {
 impl Config {
     /// Manually define the config. This should be used if all values
     /// are hard coded or obtained through a different way.
-    pub fn new(bucket: usize, cache: usize, signaling: Vec<String>) -> Self {
+    pub fn new(bucket: usize, cache: usize, signaling: String, port: usize) -> Self {
         Self {
             bucket,
             signaling,
+            port,
             cache,
         }
     }
@@ -139,6 +143,7 @@ impl Config {
                 return Ok(Self {
                     bucket: c.network.bucket,
                     signaling: c.network.signaling,
+                    port: c.network.port,
                     cache: c.network.cache,
                 });
             }
@@ -234,12 +239,13 @@ mod tests {
         let c = "# Example Actaeon config.
 [network]
         bucket = 32
-        signaling = [ '127.0.0.1' ]
+        signaling = '127.0.0.1'
+        port = 4242
         cache = 32
 
 ";
         let config = Config::from_string(c.to_string()).unwrap();
-        let created = Config::new(32, 32, vec!["127.0.0.1".to_owned()]);
+        let created = Config::new(32, 32, "127.0.0.1".to_owned(), 4242);
         assert_eq!(config, created);
     }
 

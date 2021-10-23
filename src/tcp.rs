@@ -78,6 +78,13 @@ impl Handler {
             Ok(())
         }
     }
+
+    /// Creates a new Handler.
+    pub fn try_clone(&self) -> Result<Self, Error> {
+        Ok(Self {
+            listener: self.listener.try_clone()?,
+        })
+    }
 }
 
 #[cfg(test)]

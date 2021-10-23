@@ -194,10 +194,12 @@ impl Switch {
         let (c1, c2) = Channel::new();
         let cache = Cache::new(limit);
         let queue = ActionBucket::new();
+        let switch_handler = Handler::new(center.clone())?;
+        let signaling_handler = switch_handler.try_clone()?;
         let switch = Switch {
             channel: c1,
             cache: RefCell::new(cache),
-            handler: Handler::new(center.clone())?,
+            handler: switch_handler,
             // TODO: Add parameter
             replication: 1,
             table: RefCell::new(Table::new(limit, center.clone())),
@@ -206,7 +208,7 @@ impl Switch {
             center: center.clone(),
             queue: queue.clone(),
         };
-        let interface = Interface::new(c2, config, center, queue);
+        let interface = Interface::new(c2, config, center, queue, signaling_handler);
         Ok((switch, interface))
     }
 
@@ -280,14 +282,20 @@ impl Switch {
                                                 .borrow()
                                                 .get_copy(&target, self.replication);
                                             for node in targets {
-                                                if self
-                                                    .handler
-                                                    .send(transaction.to_wire(), node)
-                                                    .is_err()
-                                                {
-                                                    // TODO: Add to lookup queue.
+                                                let target = node.address.clone();
+                                                let e =
+                                                    self.handler.send(transaction.to_wire(), node);
+                                                if e.is_err() {
                                                     log::warn!("unable to reach node");
                                                     self.table.borrow_mut().status(&target, false);
+                                                    log::warn!(
+                                                        "unable to reach node: {:?}, {}",
+                                                        target,
+                                                        e.unwrap_err()
+                                                    );
+                                                    self.table.borrow_mut().status(&source, false);
+                                                    let action = Action::lookup(target);
+                                                    self.queue.add(action);
                                                 }
                                             }
                                         }
@@ -1227,10 +1235,11 @@ impl Switch {
                     Some(data) => {
                         match data {
                             Command::System(action) => match action {
-                                // 7.
+                                // 7.1
                                 SystemAction::Subscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
+
                                 SystemAction::Subscriber(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
@@ -1238,6 +1247,7 @@ impl Switch {
                                 SystemAction::Unsubscribe(_address) => {
                                     log::warn!("unable to process event without topic");
                                 }
+
                                 SystemAction::Send(address, body) => {
                                     let message = Message::new(
                                         Class::Action,

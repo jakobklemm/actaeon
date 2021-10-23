@@ -7,6 +7,7 @@ use crate::node::Center;
 use crate::signaling::{ActionBucket, Signaling};
 use crate::switch::Channel;
 use crate::switch::{Command, SwitchAction, SystemAction};
+use crate::tcp::Handler;
 use crate::topic::Topic;
 use crate::transaction::Transaction;
 
@@ -27,11 +28,17 @@ impl Interface {
     /// Creates a new Interface. This function is currently one of the
     /// core components of starting up the system. In the future this
     /// might have to be wrapped by a start function.
-    pub fn new(channel: Channel, config: Config, center: Center, queue: ActionBucket) -> Self {
+    pub fn new(
+        channel: Channel,
+        config: Config,
+        center: Center,
+        queue: ActionBucket,
+        handler: Handler,
+    ) -> Self {
         Self {
             channel,
             center,
-            signaling: Signaling::new(config.signaling, queue),
+            signaling: Signaling::new(config.clone(), handler, queue),
         }
     }
 
@@ -100,9 +107,5 @@ impl Interface {
         if e.is_err() {
             log::error!("error terminating thread: {:?}", e);
         }
-    }
-
-    pub fn bootstrap(&self) {
-        self.signaling.clone().start()
     }
 }
