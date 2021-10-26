@@ -16,9 +16,11 @@
 //! In addition each node also contains other fields like timestamps
 //! and (in the future) a cache of recent messages.
 
+use crate::config::CenterConfig;
 use crate::error::Error;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 use std::ops::BitXor;
 use std::time::SystemTime;
 
@@ -228,6 +230,17 @@ impl Center {
             link: Link::new(ip, port),
         }
     }
+
+    /// Create a Center instance from the CenterConfig.
+    pub fn from_config(config: CenterConfig) -> Result<Self, Error> {
+        match config.secret {
+            Some(bytes) => match SecretKey::from_slice(&bytes) {
+                Some(key) => Ok(Self::new(key, config.ip, config.port)),
+                None => Err(Error::Config(String::from("invalid config"))),
+            },
+            None => Err(Error::Config(String::from("invalid config"))),
+        }
+    }
 }
 
 impl Address {
@@ -359,6 +372,12 @@ impl BitXor for &Address {
             bytes[i] = target[i] ^ source[i];
         }
         return bytes;
+    }
+}
+
+impl Hash for Address {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
     }
 }
 

@@ -9,8 +9,9 @@
 
 use crate::error::Error;
 use crate::node::{Address, Center};
-use crate::switch::{Channel, Command, SystemAction};
+use crate::switch::{Command, SystemAction};
 use crate::transaction::Transaction;
+use crate::util::Channel;
 
 /// The main structure for representing Topics in the system. It will
 /// be the main interaction point for the user. Each Topic the user
@@ -19,7 +20,6 @@ use crate::transaction::Transaction;
 /// Channel, with which the two can communicate.
 /// TODO: The thread might require a dedicated struct.
 /// TODO: Add methods for fetching fields.
-#[derive(Debug)]
 pub struct Topic {
     /// Throughout the entire system all components have the same
     /// Address type. Each Topic also has a uniqe Address, which can
@@ -27,7 +27,7 @@ pub struct Topic {
     pub address: Address,
     /// Since each Topic can receive messages individually a dedicated
     /// Channel (mpsc connection) is required.
-    pub channel: Channel,
+    pub channel: Channel<Command>,
     /// List of subscribers
     pub subscribers: SubscriberBucket,
 }
@@ -60,8 +60,6 @@ pub struct Record {
 }
 
 /// Similar to the TopicBucket but for the Handler Records.
-///
-/// TODO: Create generic bucket implentation.
 pub struct RecordBucket {
     pub records: Vec<Record>,
     pub center: Center,
@@ -74,7 +72,7 @@ impl Topic {
     /// requires the linked Channel to be stored on the Handler
     /// therad. Instead new Topics have to be created through the
     /// interface.
-    pub fn new(address: Address, channel: Channel, subscribers: Vec<Address>) -> Self {
+    pub fn new(address: Address, channel: Channel<Command>, subscribers: Vec<Address>) -> Self {
         Self {
             address,
             channel,

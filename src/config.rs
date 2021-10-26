@@ -11,9 +11,6 @@
 //! node, which currently need to be manually set by the user. In the
 //! future this should get replaced by some sort of setup script or
 //! automatically handled in the signaling config.
-//!
-//! TODO: Determine connection between center config and secret key
-//! and how much the library should be responsible for.
 
 use crate::error::Error;
 use serde::Deserialize;
@@ -29,6 +26,8 @@ use std::io::BufRead;
 struct Network {
     /// serde deserialization value for the config file.
     bucket: usize,
+    /// Number of message to be sent
+    replication: usize,
     /// serde deserialization value for the config file.
     signaling: String,
     port: usize,
@@ -60,11 +59,10 @@ pub struct Config {
     /// bucket, the maximum number of buckets is currently not
     /// configurable and defined through the hashing / address system.
     pub bucket: usize,
+    /// Concurrent messages count
+    pub replication: usize,
     /// Array of signaling servers, used to connect to the system
     /// initially and possibly provide forwarding.
-    ///
-    /// TODO: Replace String with signaling struct and update toml
-    /// file with new string format.
     pub signaling: String,
     /// Port of the signaling server.
     pub port: usize,
@@ -115,9 +113,16 @@ pub struct CenterConfig {
 impl Config {
     /// Manually define the config. This should be used if all values
     /// are hard coded or obtained through a different way.
-    pub fn new(bucket: usize, cache: usize, signaling: String, port: usize) -> Self {
+    pub fn new(
+        bucket: usize,
+        replication: usize,
+        cache: usize,
+        signaling: String,
+        port: usize,
+    ) -> Self {
         Self {
             bucket,
+            replication,
             signaling,
             port,
             cache,
@@ -142,6 +147,7 @@ impl Config {
                 log::info!("Successfully loaded system config from file!");
                 return Ok(Self {
                     bucket: c.network.bucket,
+                    replication: c.network.replication,
                     signaling: c.network.signaling,
                     port: c.network.port,
                     cache: c.network.cache,
@@ -240,12 +246,13 @@ mod tests {
 [network]
         bucket = 32
         signaling = '127.0.0.1'
+        replication = 3
         port = 4242
         cache = 32
 
 ";
         let config = Config::from_string(c.to_string()).unwrap();
-        let created = Config::new(32, 32, "127.0.0.1".to_owned(), 4242);
+        let created = Config::new(32, 3, 32, "127.0.0.1".to_owned(), 4242);
         assert_eq!(config, created);
     }
 
@@ -261,16 +268,4 @@ mod tests {
         let created = CenterConfig::new("127.0.0.1".to_owned(), 42, [0; 32], "actaeon".to_owned());
         assert_eq!(config.ip, created.ip);
     }
-
-    // Test will sometimes fail, likely due to file system issues.
-    // TODO: Find special file system test method.
-    // #[test]
-    // fn test_center_read_secret() {
-    //     let (_, sec) = box_::gen_keypair();
-    //     std::fs::write("test_secret1.key", sec.0).unwrap();
-
-    //     let key = CenterConfig::load_key("test_secret1.key").unwrap();
-    //     assert_eq!(key, sec.0);
-    //     std::fs::remove_file("test_secret1.key").unwrap();
-    // }
 }

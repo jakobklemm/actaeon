@@ -38,6 +38,7 @@ pub struct Transaction {
 /// be decontructed at the receiving end.
 ///
 /// Wire format:
+/// 02 bytes: Length,
 /// 04 bytes: Class,
 /// 32 bytes: Source,
 /// 32 bytes: Target,
@@ -45,9 +46,10 @@ pub struct Transaction {
 /// 24 bytes: Nonce,
 /// .. bytes: Body,
 ///
-/// Minimum data size: 108 bytes (+ body).
+/// Minimum data size: 110 bytes (+ body).
 #[derive(Debug)]
 pub struct Wire {
+    length: [u8; 2],
     pub uuid: [u8; 16],
     class: [u8; 4],
     source: [u8; 32],
@@ -71,10 +73,6 @@ pub enum Class {
     Lookup,
     /// Return value for Lookup calls.
     Details,
-    /// Bootstrap, Initiate into remote RTs.
-    Bootstrap,
-    /// Receive large numbers of RT infos.
-    Bulk,
     /// Message coming from a user node to the distribution node.
     Record,
     /// Messages coming from a distribution node to the target node.
@@ -125,6 +123,7 @@ impl Transaction {
     /// uses fewer allocations.
     pub fn to_wire(&self) -> Wire {
         Wire {
+            length: self.len(),
             uuid: *self.uuid.as_bytes(),
             class: self.message.class.as_bytes(),
             source: self.message.source.as_bytes(),
@@ -158,6 +157,10 @@ impl Transaction {
     /// Returns the Class of the Message / Transaction.
     pub fn class(&self) -> Class {
         self.message.class.clone()
+    }
+
+    fn len(&self) -> [u8; 2] {
+        self.message.len()
     }
 
     /// When a message comes from a user to the record location the
@@ -221,8 +224,6 @@ impl Class {
             [0, 0, 0, 2] => Ok(Self::Pong),
             [0, 0, 1, 0] => Ok(Self::Lookup),
             [0, 0, 1, 1] => Ok(Self::Details),
-            [0, 0, 1, 2] => Ok(Self::Bootstrap),
-            [0, 0, 1, 3] => Ok(Self::Bulk),
             [0, 1, 0, 0] => Ok(Self::Subscribe),
             [0, 1, 0, 1] => Ok(Self::Unsubscribe),
             [0, 1, 0, 2] => Ok(Self::Subscriber),
@@ -243,8 +244,6 @@ impl Class {
             Self::Pong => [0, 0, 0, 2],
             Self::Lookup => [0, 0, 1, 0],
             Self::Details => [0, 0, 1, 1],
-            Self::Bootstrap => [0, 0, 1, 3],
-            Self::Bulk => [0, 0, 1, 4],
             Self::Subscribe => [0, 1, 0, 0],
             Self::Unsubscribe => [0, 1, 0, 1],
             Self::Subscriber => [0, 1, 0, 2],
@@ -266,6 +265,7 @@ impl Wire {
             return Err(Error::Invalid(String::from("invalid number of bytes")));
         }
 
+        let mut length: [u8; 2] = [0; 2];
         let mut class: [u8; 4] = [0; 4];
         let mut source: [u8; 32] = [0; 32];
         let mut target: [u8; 32] = [0; 32];
@@ -274,31 +274,36 @@ impl Wire {
         let mut body: Vec<u8> = Vec::new();
 
         for (i, j) in raw.iter().enumerate() {
-            // bytes 0..3 = Class, len = 4, offset = 0
-            if i <= 3 {
-                class[i] = *j;
+            // bytes 0..1 = Length, len = 2, offset = 0
+            if i <= 1 {
+                length[i] = *j;
             }
-            // bytes 4..35 = Source, len = 32, offset = 4
-            else if i >= 4 && i <= 35 {
-                source[i - 4] = *j;
+            // bytes 2..5 = Class, len = 4, offset = 2
+            else if i >= 2 && i <= 5 {
+                class[i - 2] = *j;
             }
-            // bytes 36..67 = Target, len = 32, offset = 36
-            else if i >= 36 && i <= 67 {
-                target[i - 36] = *j;
+            // bytes 6..37 = Source, len = 32, offset = 6
+            else if i >= 6 && i <= 37 {
+                source[i - 6] = *j;
             }
-            // bytes 68..83 = UUID, len = 16, offset = 68
-            else if i >= 68 && i <= 83 {
-                uuid[i - 68] = *j;
+            // bytes 38..69 = Target, len = 32, offset = 38
+            else if i >= 38 && i <= 69 {
+                target[i - 38] = *j;
             }
-            // bytes 84..107 = Nonce, len = 24, offset = 84
-            else if i >= 84 && i <= 107 {
-                nonce[i - 84] = *j;
+            // bytes 70..85 = UUID, len = 16, offset = 70
+            else if i >= 70 && i <= 85 {
+                uuid[i - 70] = *j;
+            }
+            // bytes 86..109 = Nonce, len = 24, offset = 86
+            else if i >= 86 && i <= 109 {
+                nonce[i - 86] = *j;
             } else {
                 body.push(*j);
             }
         }
 
         Ok(Self {
+            length,
             class,
             source,
             target,
@@ -318,6 +323,7 @@ impl Wire {
     /// reference to the Wire object.
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
+        data.append(&mut self.length.to_vec());
         data.append(&mut self.class.to_vec());
         data.append(&mut self.source.to_vec());
         data.append(&mut self.target.to_vec());
@@ -473,6 +479,7 @@ mod tests {
     fn generate_test_data() -> Vec<u8> {
         let mut data: Vec<u8> = Vec::new();
 
+        data.append(&mut [0, 8].to_vec());
         data.append(&mut [0, 0, 0, 1].to_vec());
 
         let source = Address::generate("abc")

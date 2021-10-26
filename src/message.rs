@@ -90,6 +90,10 @@ impl Message {
     pub fn decrypt(&mut self, center: &Center) -> Result<(), Error> {
         self.body.decrypt(&self.seed, &center, &self.source)
     }
+
+    pub fn len(&self) -> [u8; 2] {
+        self.body.len()
+    }
 }
 
 impl Body {
@@ -133,6 +137,13 @@ impl Body {
         } else {
             Err(Error::Invalid(String::from("not encrypted")))
         }
+    }
+
+    pub fn len(&self) -> [u8; 2] {
+        let len = self.bytes.len();
+        let ins = len % 255;
+        let sig = len / 255;
+        [sig as u8, ins as u8]
     }
 }
 
@@ -207,5 +218,37 @@ mod tests {
         m.encrypt(&theircenter);
         m.decrypt(&ourcenter).unwrap();
         assert_eq!(m.body.as_bytes(), [111, 42]);
+    }
+
+    #[test]
+    fn test_length_empty() {
+        let body = Body::new(Vec::new());
+        let len = body.len();
+        assert_eq!(len, [0, 0]);
+    }
+
+    #[test]
+    fn test_length_once() {
+        let data = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let body = Body::new(data);
+        let len = body.len();
+        assert_eq!(len, [0, 10]);
+    }
+
+    #[test]
+    fn test_length_full() {
+        let mut data = Vec::new();
+        for i in 0..255 {
+            data.push(i);
+        }
+
+        for i in 0..255 {
+            data.push(i);
+        }
+
+        data.push(42);
+        let body = Body::new(data);
+        let len = body.len();
+        assert_eq!(len, [2, 1]);
     }
 }

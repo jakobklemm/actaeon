@@ -6,7 +6,6 @@
 use crate::config::Config;
 use crate::message::Message;
 use crate::node::Address;
-use crate::tcp::Handler;
 use crate::transaction::{Class, Transaction};
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
@@ -20,7 +19,6 @@ pub struct Signaling {
     port: usize,
     pub queue: ActionBucket,
     last: SystemTime,
-    handler: Handler,
 }
 
 #[derive(Eq, PartialEq)]
@@ -44,13 +42,12 @@ pub enum Type {
 }
 
 impl Signaling {
-    pub fn new(config: Config, handler: Handler, queue: ActionBucket) -> Self {
+    pub fn new(config: Config, queue: ActionBucket) -> Self {
         Self {
             server: config.signaling,
             port: config.port,
             queue,
             last: SystemTime::now(),
-            handler,
         }
     }
 
@@ -58,12 +55,14 @@ impl Signaling {
         thread::spawn(move || {
             // TODO: Bootstrapping
             loop {
-                // Do a action every two minutes.
-                if self.last.elapsed().unwrap() >= Duration::new(120, 0) {
-                    self.last = SystemTime::now();
-                    // select a random node, get the closes few to it,
-                    // look for Link None nodes and perform a lookup
-                    // on them.
+                if self.queue.len() == 0 {
+                    // Do a action every two minutes.
+                    if self.last.elapsed().unwrap() >= Duration::new(120, 0) {
+                        self.last = SystemTime::now();
+                        // select a random node, get the closes few to it,
+                        // look for Link None nodes and perform a lookup
+                        // on them.
+                    }
                 }
             }
         });
@@ -141,6 +140,15 @@ impl ActionBucket {
             }
         } else {
             log::error!("one of the threads might have crashed.");
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        if let Ok(actions) = self.actions.lock() {
+            actions.len()
+        } else {
+            0
+            //log::error!("one of the threads might have crashed.");
         }
     }
 }
