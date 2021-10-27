@@ -61,6 +61,21 @@ impl<T> Channel<T> {
     }
 }
 
+pub fn length(data: &[u8]) -> [u8; 2] {
+    let length = data.len();
+    let sig: u8 = (length / 255) as u8;
+    let ins: u8 = (length % 255) as u8;
+    [sig, ins]
+}
+
+pub fn integer(length: [u8; 2]) -> usize {
+    (length[0] as usize * 255) + length[1] as usize
+}
+
+pub fn get_length(data: &[u8]) -> usize {
+    data[0] as usize * 255 + data[1] as usize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +85,55 @@ mod tests {
         let (c1, c2) = Channel::new();
         let _ = c1.send(42);
         assert_eq!(c2.recv(), Some(42));
+    }
+
+    #[test]
+    fn test_length_simple() {
+        let data = vec![0, 1, 244, 213];
+        assert_eq!(length(&data), [0, 4]);
+    }
+
+    #[test]
+    fn test_length_one() {
+        let mut outer = Vec::new();
+        for i in 0..255 {
+            outer.push(i);
+        }
+        outer.push(42);
+        let length = length(&outer);
+        assert_eq!(length, [1, 1]);
+    }
+
+    #[test]
+    fn test_length_full() {
+        let mut outer = Vec::new();
+        for _ in 0..254 {
+            for j in 0..255 {
+                outer.push(j);
+            }
+        }
+        outer.push(42);
+        let length = length(&outer);
+        assert_eq!(length, [254, 1]);
+    }
+
+    #[test]
+    fn test_length_back() {
+        let data = vec![1, 2, 3, 4, 5, 6, 7];
+        let len = data.len();
+        assert_eq!(len, integer(length(&data)));
+    }
+
+    #[test]
+    fn test_length_double_random() {
+        for i in 0..1000 {
+            let mut data = Vec::new();
+            for j in 0..i {
+                data.push((j % 255) as u8);
+            }
+            let real = data.len();
+            let len = integer(length(&data));
+            assert_eq!(real, len);
+        }
     }
 }

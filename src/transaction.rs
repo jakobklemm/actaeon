@@ -47,7 +47,7 @@ pub struct Transaction {
 /// .. bytes: Body,
 ///
 /// Minimum data size: 110 bytes (+ body).
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Wire {
     length: [u8; 2],
     pub uuid: [u8; 16],

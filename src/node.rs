@@ -18,6 +18,7 @@
 
 use crate::config::CenterConfig;
 use crate::error::Error;
+use crate::util;
 use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::{PublicKey, SecretKey};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -149,13 +150,18 @@ impl Node {
     pub fn as_bytes(&self) -> Vec<u8> {
         match &self.link {
             Some(link) => {
-                let mut data = self.address.as_bytes().to_vec();
-                data.append(&mut link.as_bytes().to_vec());
+                let mut data = vec![0, 0];
+                let mut link = link.as_bytes().to_vec();
+                data.append(&mut self.address.as_bytes().to_vec());
+                data.append(&mut link);
+                let length = util::length(&link);
+                data[0] = length[0];
+                data[1] = length[1];
                 return data;
             }
             None => {
-                let mut data = self.address.as_bytes().to_vec();
-                data.push(0);
+                let mut data = vec![0, 0];
+                data.append(&mut self.address.as_bytes().to_vec());
                 return data;
             }
         }
@@ -164,30 +170,26 @@ impl Node {
     /// Turns the bytes back into a Node object. Currently this
     /// function can't fail, if the given data is invalid the default
     /// (empty) Node gets returned.
-    pub fn from_bytes(mut bytes: Vec<u8>) -> Node {
+    pub fn from_bytes(mut bytes: Vec<u8>) -> Result<Node, Error> {
         if bytes.len() < 32 {
-            Node::default()
+            Err(Error::Invalid(String::from("node address is not valid")))
         } else if bytes.len() == 32 {
             let mut data = [0; 32];
             for (i, j) in bytes.iter().enumerate() {
                 data[i] = *j;
             }
-            let address = Address::from_bytes(data).unwrap();
-            Node::new(address, None)
+            let address = Address::from_bytes(data)?;
+            Ok(Node::new(address, None))
+        } else if bytes.len() == 34 {
+            let addr = bytes.split_off(2);
+            let addr = Address::from_slice(&addr)?;
+            Ok(Node::new(addr, None))
         } else {
-            let mut data = [0; 32];
-            for (i, j) in bytes.iter().enumerate() {
-                data[i] = *j;
-            }
-            let address = Address::from_bytes(data).unwrap();
-            let link_bytes = bytes.split_off(32);
-            match Link::from_bytes(link_bytes) {
-                Ok(link) => Node::new(address, Some(link)),
-                Err(e) => {
-                    log::warn!("unable to parse link data: {}", e);
-                    Node::default()
-                }
-            }
+            let mut addr_to_link = bytes.split_off(2);
+            let link = addr_to_link.split_off(32);
+            let address = Address::from_slice(&addr_to_link)?;
+            let link = Link::from_bytes(link)?;
+            Ok(Node::new(address, Some(link)))
         }
     }
 }
@@ -445,24 +447,19 @@ impl Link {
 
     /// Exports the link details to bytes that can be sent over the
     /// wire. Structure:
-    /// Link Length: 1 byte
     /// IP Address data,
     /// Last 8 bytes: Port number
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut data = vec![0];
+        let mut data = Vec::new();
         let address = self.ip.as_bytes();
         let port = self.port.to_le_bytes();
         data.append(&mut address.to_vec());
         data.append(&mut port.to_vec());
-        let len = data.len() as u8;
-        let first = data.first_mut().unwrap();
-        *first = len;
         return data;
     }
 
     pub fn from_bytes(mut data: Vec<u8>) -> Result<Link, Error> {
         data.reverse();
-        data.pop();
         let mut address = data.split_off(8);
         data.reverse();
         address.reverse();
@@ -576,5 +573,19 @@ mod tests {
             let c = Link::from_bytes(b).unwrap();
             assert_eq!(l, c);
         }
+    }
+
+    #[test]
+    fn test_node_serialize() {
+        let link = Link::new(String::from("127.0.0.1"), 12345);
+        let node = Node::new(Address::random(), Some(link));
+        let serialized = node.as_bytes();
+        let deserialized = Node::from_bytes(serialized).unwrap();
+        assert_eq!(deserialized, node);
+    }
+
+    #[test]
+    fn test_address_random() {
+        assert_ne!(Address::random(), Address::random());
     }
 }

@@ -4,10 +4,7 @@ use crate::config::{CenterConfig, Config};
 use crate::error::Error;
 use crate::node::Address;
 use crate::node::Center;
-use crate::signaling::{ActionBucket, Signaling};
-use crate::switch::Switch;
-use crate::switch::{Command, SwitchAction, SystemAction};
-use crate::topic::Topic;
+use crate::record::RecordBucket;
 use crate::transaction::Transaction;
 use crate::util::Channel;
 
@@ -16,7 +13,8 @@ use crate::util::Channel;
 /// there the user can interact (receive messages) with the listener.
 pub struct Interface {
     /// Center used for getting message origins.
-    pub center: Center,
+    center: Center,
+    records: RecordBucket,
 }
 
 impl Interface {
@@ -24,6 +22,10 @@ impl Interface {
     /// core components of starting up the system. In the future this
     /// might have to be wrapped by a start function.
     pub fn new(config: Config, center: Center) -> Result<Self, Error> {
-        Ok(Self { center })
+        let bucket = RecordBucket::new();
+        Ok(Self {
+            center,
+            records: bucket,
+        })
     }
 }

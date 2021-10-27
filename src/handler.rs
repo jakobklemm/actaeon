@@ -7,8 +7,9 @@
 use crate::error::Error;
 use crate::node::Address;
 use crate::node::{Center, Node};
-use crate::transaction::{Transaction, Wire};
-use crate::util::Channel;
+use crate::transaction::Wire;
+use crate::util::{self, Channel};
+use std::cell::RefCell;
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 use std::thread;
@@ -18,29 +19,35 @@ use std::thread;
 /// around the underlying TCP modules.
 pub struct Listener {
     listener: TcpListener,
-    connections: ConnectionBucket,
+    connections: RefCell<ConnectionBucket>,
     channel: Channel<Wire>,
+    secondary: Channel<Node>,
     limit: usize,
 }
 
 struct Connection {
     address: Address,
-    channel: Channel<Wire>,
+    channel: Channel<Action>,
 }
 
 struct Handler {
     address: Address,
-    channel: Channel<Wire>,
-    stream: TcpStream,
+    channel: Channel<Action>,
+    socket: TcpStream,
+}
+
+enum Action {
+    Message(Wire),
+    Shutdown,
 }
 
 struct ConnectionBucket {
-    connections: Vec<Connection>,
+    pub connections: Vec<Connection>,
 }
 
 impl Connection {
-    fn new(address: Address, stream: TcpStream) -> (Self, Handler) {
-        let (c1, c2) = Channel::<Wire>::new();
+    fn new(address: Address, socket: TcpStream) -> (Self, Handler) {
+        let (c1, c2) = Channel::new();
         let connection = Connection {
             address: address.clone(),
             channel: c1,
@@ -48,152 +55,217 @@ impl Connection {
         let handler = Handler {
             address,
             channel: c2,
-            stream,
+            socket,
         };
         (connection, handler)
+    }
+
+    /// Since there is no reason to use a blocking function on the
+    /// Connection directly only the non-blocking function is exposed.
+    fn try_recv(&self) -> Option<Action> {
+        self.channel.try_recv()
+    }
+
+    fn address(&self) -> Address {
+        self.address.clone()
     }
 }
 
 impl Listener {
     /// Spaws a new TCP listener based on the link details of the
     /// center.
-    pub fn new(center: Center, channel: Channel<Wire>, limit: usize) -> Result<Self, Error> {
+    pub fn new(
+        center: Center,
+        channel: Channel<Wire>,
+        secondary: Channel<Node>,
+        limit: usize,
+    ) -> Result<Self, Error> {
         let listener = TcpListener::bind(center.link.to_string())?;
         listener.set_nonblocking(true)?;
         let listener = Self {
             listener,
-            connections: ConnectionBucket::new(),
+            connections: RefCell::new(ConnectionBucket::new()),
             channel,
+            // TODO: Temp for testing, replace with Channel to -->?
+            secondary,
             limit,
         };
         Ok(listener)
     }
 
-    pub fn start(mut self) -> Result<(), Error> {
+    pub fn start(self) {
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
+            if let Some(wire) = self.channel.try_recv() {
+                // TODO: Lookup targets from RT
+                let targets: Vec<Node> = vec![];
+                for node in targets {
+                    let target = node.address.clone();
+                    match self.connections.borrow().get(&target) {
+                        Some(conn) => {
+                            let _ = conn.channel.send(Action::Message(wire.clone()));
+                        }
+                        None => {
+                            // TODO: Handle outgoing
+                        }
+                    }
+                }
+            }
+
             // 2. Read from TCP listener
             match self.listener.accept() {
                 Ok((mut socket, _addr)) => {
-                    let mut header: [u8; 110] = [0; 110];
-                    if let Ok(length) = socket.read(&mut header) {
-                        if length < 110 {
-                            // TODO: Handle bootstrap or center lookup requests.
-                            continue;
-                        }
-                        if let Ok(wire) = Listener::handle_wire(&mut socket, header) {
-                            // TODO: Handle crashed Channels
+                    log::info!("new incoming TCP connection!");
+                    match Listener::handle_establish(&mut socket) {
+                        Ok((wire, node)) => {
+                            let address = node.address.clone();
+                            // TODO: Handle error
                             let _ = self.channel.send(wire);
-                            if self.connections.len() >= self.limit {
-                                // Connection pool is full, replacing
-                                // an existing one isn't possible
-                                // right now.
+                            // TODO: Replace with Arc Mutex RT
+                            let _ = self.secondary.send(node);
+                            // Check if still space available.
+                            if self.connections.borrow().len() >= self.limit {
+                                // No space => drop conn.
+                                // TODO: Try if requried.
+                                // let _ = socket.shutdown(std::net::Shutdown::Both);
                                 continue;
                             }
-                            let resp = Listener::get_remote(&mut socket);
-                        } else {
-                            log::error!("unable to receive TCP data!");
+                            let (connection, handler) = Connection::new(address, socket);
+                            self.connections.borrow_mut().add(connection);
+                            Handler::spawn(handler);
                         }
-                    } else {
-                        log::error!("unable to receive TCP data!");
+                        Err(e) => {
+                            log::warn!("received invalid TCP data: {}", e);
+                        }
                     }
                 }
-                Err(_) => {}
+                Err(_) => {
+                    log::error!("unable to handle incoming TCP connection.");
+                }
+            }
+
+            // 3. Read from each Connection Channel.
+            for conn in self.connections.borrow().connections.iter() {
+                if let Some(action) = conn.try_recv() {
+                    match action {
+                        Action::Message(wire) => {
+                            // TODO: Handle easy Kademlia cases.
+                            // TODO: Handle error / thread crash.
+                            println!("reached main thread data: {:?}", wire);
+                            let _ = self.channel.send(wire);
+                        }
+                        Action::Shutdown => {
+                            let addr = conn.address();
+                            self.connections.borrow_mut().remove(&addr);
+                        }
+                    }
+                }
             }
         });
-        Ok(())
     }
 
-    fn handle_wire(socket: &mut TcpStream, header: [u8; 110]) -> Result<Wire, Error> {
-        let body_length: u64 = (header[0] * 255 + header[1]).into();
-        let mut body: Vec<u8> = Vec::new();
-        let mut taker = socket.take(body_length);
-        if let Ok(length) = taker.read(&mut body) {
-            if length as u64 != body_length {
+    fn handle_establish(socket: &mut TcpStream) -> Result<(Wire, Node), Error> {
+        let header = Listener::handle_header(socket)?;
+        let length = util::get_length(&header);
+        let body = Listener::handle_body(socket, length)?;
+        let wire: Vec<u8> = header
+            .to_vec()
+            .into_iter()
+            .chain(body.into_iter())
+            .collect();
+        let wire = Wire::from_bytes(&wire)?;
+        let node = Listener::handle_node(socket)?;
+        Ok((wire, node))
+    }
+
+    fn handle_header(socket: &mut TcpStream) -> Result<[u8; 110], Error> {
+        let mut header: [u8; 110] = [0; 110];
+        if let Ok(length) = socket.read(&mut header) {
+            if length < 110 {
+                // TODO: Handle bootstrap or center lookup requests.
                 return Err(Error::Invalid(String::from("received invalid data!")));
             }
-            let mut data: Vec<u8> = Vec::new();
-            data.append(&mut header.to_vec());
-            data.append(&mut body);
-            return Wire::from_bytes(&data);
+            Ok(header)
+        } else {
+            Err(Error::Invalid(String::from("received invalid data!")))
+        }
+    }
+
+    fn handle_body(socket: &mut TcpStream, length: usize) -> Result<Vec<u8>, Error> {
+        let mut body: Vec<u8> = vec![0; length];
+        if let Ok(_length) = socket.read_exact(&mut body) {
+            return Ok(body);
         }
         Err(Error::Invalid(String::from("received invalid data!")))
     }
 
-    fn get_remote(socket: &mut TcpStream) -> Result<Node, Error> {
-        // 6x 0 is not a possible
-        let request = [0, 0, 0, 0, 0, 0];
-        let res = socket.write(&request)?;
-        if res != 6 {
-            return Err(Error::Connection(String::from("unable to write data")));
-        }
-        let mut response: Vec<u8> = Vec::new();
-        let mut length: [u8; 2] = [0, 0];
-        response.append(&mut length.to_vec());
-        if let Ok(read_length) = socket.read(&mut length) {
-            if read_length != 2 {
-                return Err(Error::Connection(String::from("unable to write data")));
-            }
-            let length = (length[0] * 255 + length[1]).into();
-            let mut taker = socket.take(length);
-            if let Ok(read) = taker.read(&mut response) {
-                if read as u64 != length {
-                    return Err(Error::Connection(String::from("unable to write data")));
-                }
-                let node = Node::from_bytes(response);
-                Ok(node)
-            } else {
-                return Err(Error::Connection(String::from("unable to write data")));
-            }
-        } else {
-            return Err(Error::Connection(String::from("unable to write data")));
-        }
+    fn handle_node(socket: &mut TcpStream) -> Result<Node, Error> {
+        let mut header = [0; 34];
+        let _ = socket.read(&mut header);
+        let length = [header[0], header[1]];
+        let length = util::integer(length);
+        let mut link: Vec<u8> = vec![0; length.into()];
+        let _ = socket.read_exact(&mut link);
+        let mut node_bytes = Vec::new();
+        node_bytes.append(&mut header.to_vec());
+        node_bytes.append(&mut link);
+        let node = Node::from_bytes(node_bytes)?;
+        Ok(node)
     }
+}
 
-    pub fn read(&mut self) -> Option<Wire> {
-        match self.listener.accept() {
-            Ok((mut socket, _addr)) => {
-                let mut header: [u8; 110] = [0; 110];
-                match socket.read(&mut header) {
-                    Ok(len) => {
-                        if len <= 110 {
-                            return None;
-                        } else {
-                            let length = header[0] * 255 + header[1];
-                            let mut body = Vec::new();
-                            let mut handle = socket.take(length.into());
-                            let _ = handle.read(&mut body);
-                            let mut data = Vec::new();
-                            data.append(&mut header.to_vec());
-                            data.append(&mut body);
-                            match Wire::from_bytes(&data) {
-                                Ok(wire) => Some(wire),
-                                Err(e) => {
-                                    log::warn!("received invalid data: {}", e);
-                                    None
-                                }
+impl Handler {
+    fn spawn(mut self) {
+        thread::spawn(move || {
+            // Each connection gets its own thread.
+            loop {
+                // 1. Listen on Channel
+                if let Some(action) = self.channel.try_recv() {
+                    match action {
+                        Action::Message(wire) => {
+                            let e = self.socket.write(&wire.as_bytes());
+                            if e.is_err() {
+                                println!("is_error data");
+                                log::warn!("tcp connection failed: {}", e.unwrap_err());
+                                let _ = self.channel.send(Action::Shutdown);
+                                break;
                             }
                         }
+                        Action::Shutdown => {
+                            break;
+                        }
                     }
-                    Err(e) => None,
+                }
+
+                // 2. Listen on socket
+                if let Ok(wire) = Handler::message(&mut self.socket) {
+                    println!("reached thread data: {:?}", wire);
+                    let _ = self.channel.send(Action::Message(wire));
+                } else {
+                    println!("unable to process data");
                 }
             }
-            Err(_) => {
-                // TODO: Handle disconnect
-                None
-            }
-        }
+        });
     }
 
-    pub fn send(&self, data: Wire, node: Node) -> Result<(), Error> {
-        if node.link.is_none() {
-            // TODO: Add to node link refetch
-            return Err(Error::Invalid(String::from("no link data found")));
-        } else {
-            let mut stream = TcpStream::connect(node.link.as_ref().unwrap().to_string())?;
-            stream.write(&data.as_bytes())?;
-            Ok(())
+    fn message(socket: &mut TcpStream) -> Result<Wire, Error> {
+        let mut header = [0; 110];
+        let header_length = socket.read(&mut header)?;
+        if header_length != 110 {
+            return Err(Error::Invalid(String::from(
+                "Received invalid header data!",
+            )));
         }
+        let length = util::get_length(&header);
+        let mut body: Vec<u8> = vec![0; length];
+        socket.read_exact(&mut body)?;
+        let wire: Vec<u8> = header
+            .to_vec()
+            .into_iter()
+            .chain(body.into_iter())
+            .collect();
+        let wire = Wire::from_bytes(&wire)?;
+        Ok(wire)
     }
 }
 
@@ -253,7 +325,8 @@ mod tests {
         let (_, s) = box_::gen_keypair();
         let center = Center::new(s, String::from("127.0.0.1"), 42434);
         let (c1, _) = Channel::new();
-        let h = Listener::new(center, c1, 42).unwrap();
+        let (c2, _) = Channel::new();
+        let h = Listener::new(center, c1, c2, 42).unwrap();
         assert_eq!(
             h.listener.local_addr().unwrap().ip().to_string(),
             String::from("127.0.0.1")

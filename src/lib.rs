@@ -2,7 +2,7 @@ pub mod bucket;
 pub mod config;
 pub mod error;
 pub mod handler;
-//pub mod interface;
+pub mod interface;
 pub mod message;
 pub mod node;
 pub mod record;
