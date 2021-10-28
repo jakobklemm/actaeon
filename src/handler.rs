@@ -127,7 +127,6 @@ impl Listener {
                             if self.connections.borrow().len() >= self.limit {
                                 // No space => drop conn.
                                 // TODO: Try if requried.
-                                // let _ = socket.shutdown(std::net::Shutdown::Both);
                                 continue;
                             }
                             let (connection, handler) = Connection::new(address, socket);
@@ -151,7 +150,6 @@ impl Listener {
                         Action::Message(wire) => {
                             // TODO: Handle easy Kademlia cases.
                             // TODO: Handle error / thread crash.
-                            println!("reached main thread data: {:?}", wire);
                             let _ = self.channel.send(wire);
                         }
                         Action::Shutdown => {
@@ -217,16 +215,20 @@ impl Listener {
 impl Handler {
     fn spawn(mut self) {
         thread::spawn(move || {
-            // Each connection gets its own thread.
+            // Dedicated thread per socket.
             loop {
-                // 1. Listen on Channel
+                // Incoming TCP
+                if let Ok(wire) = Handler::message(&mut self.socket) {
+                    let _ = self.channel.send(Action::Message(wire));
+                } else {
+                }
+
+                // Channel messages
                 if let Some(action) = self.channel.try_recv() {
                     match action {
                         Action::Message(wire) => {
                             let e = self.socket.write(&wire.as_bytes());
                             if e.is_err() {
-                                println!("is_error data");
-                                log::warn!("tcp connection failed: {}", e.unwrap_err());
                                 let _ = self.channel.send(Action::Shutdown);
                                 break;
                             }
@@ -235,14 +237,6 @@ impl Handler {
                             break;
                         }
                     }
-                }
-
-                // 2. Listen on socket
-                if let Ok(wire) = Handler::message(&mut self.socket) {
-                    println!("reached thread data: {:?}", wire);
-                    let _ = self.channel.send(Action::Message(wire));
-                } else {
-                    println!("unable to process data");
                 }
             }
         });
@@ -256,6 +250,7 @@ impl Handler {
                 "Received invalid header data!",
             )));
         }
+        println!("received header data: {:?}", header);
         let length = util::get_length(&header);
         let mut body: Vec<u8> = vec![0; length];
         socket.read_exact(&mut body)?;

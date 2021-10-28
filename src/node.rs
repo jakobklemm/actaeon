@@ -150,13 +150,10 @@ impl Node {
     pub fn as_bytes(&self) -> Vec<u8> {
         match &self.link {
             Some(link) => {
-                let mut data = vec![0, 0];
                 let mut link = link.as_bytes().to_vec();
+                let mut data = util::length(&link).to_vec();
                 data.append(&mut self.address.as_bytes().to_vec());
                 data.append(&mut link);
-                let length = util::length(&link);
-                data[0] = length[0];
-                data[1] = length[1];
                 return data;
             }
             None => {
@@ -174,20 +171,26 @@ impl Node {
         if bytes.len() < 32 {
             Err(Error::Invalid(String::from("node address is not valid")))
         } else if bytes.len() == 32 {
-            let mut data = [0; 32];
-            for (i, j) in bytes.iter().enumerate() {
-                data[i] = *j;
-            }
-            let address = Address::from_bytes(data)?;
+            let address = Address::from_slice(&bytes)?;
             Ok(Node::new(address, None))
         } else if bytes.len() == 34 {
             let addr = bytes.split_off(2);
             let addr = Address::from_slice(&addr)?;
             Ok(Node::new(addr, None))
         } else {
-            let mut addr_to_link = bytes.split_off(2);
-            let link = addr_to_link.split_off(32);
-            let address = Address::from_slice(&addr_to_link)?;
+            let mut length = [0; 2];
+            let mut addr = [0; 32];
+            let mut link = Vec::new();
+            for (i, j) in bytes.iter().enumerate() {
+                if i <= 1 {
+                    length[i] = *j;
+                } else if i >= 2 && i <= 33 {
+                    addr[i - 2] = *j;
+                } else {
+                    link.push(*j);
+                }
+            }
+            let address = Address::from_bytes(addr)?;
             let link = Link::from_bytes(link)?;
             Ok(Node::new(address, Some(link)))
         }
@@ -577,7 +580,7 @@ mod tests {
 
     #[test]
     fn test_node_serialize() {
-        let link = Link::new(String::from("127.0.0.1"), 12345);
+        let link = Link::new(String::from("192.168.42"), 12345);
         let node = Node::new(Address::random(), Some(link));
         let serialized = node.as_bytes();
         let deserialized = Node::from_bytes(serialized).unwrap();
@@ -587,5 +590,14 @@ mod tests {
     #[test]
     fn test_address_random() {
         assert_ne!(Address::random(), Address::random());
+    }
+
+    #[test]
+    fn test_node_length() {
+        let l = Link::new("192.168.1.42".to_string(), 2424);
+        let node = Node::new(Address::random(), Some(l.clone()));
+        let ser = node.as_bytes();
+        let len = util::length(&l.as_bytes());
+        assert_eq!(ser[0..1], len[0..1]);
     }
 }
