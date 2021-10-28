@@ -7,9 +7,9 @@ pub mod message;
 pub mod node;
 pub mod record;
 pub mod router;
-//pub mod signaling;
-//pub mod switch;
-//pub mod topic;
+pub mod signaling;
+pub mod switch;
+pub mod topic;
 pub mod transaction;
 pub mod util;
 

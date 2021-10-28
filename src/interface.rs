@@ -17,6 +17,12 @@ pub struct Interface {
     records: RecordBucket,
 }
 
+pub enum InterfaceAction {
+    Shutdown,
+    Message(Transaction),
+    Subscribe(Address),
+}
+
 impl Interface {
     /// Creates a new Interface. This function is currently one of the
     /// core components of starting up the system. In the future this

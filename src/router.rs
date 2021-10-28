@@ -7,6 +7,7 @@
 use crate::bucket::Bucket;
 use crate::error::Error;
 use crate::node::{Address, Center, Node};
+use std::sync::{Arc, Mutex};
 
 /// The entry and interaction point for the binary routing tree. It
 /// holds the root of the tree and is mainly a nice interface for the
@@ -20,6 +21,14 @@ pub struct Table {
     root: Element,
     /// Since many of the distance calculations require the Center, it
     /// is stored here and will be passed to the functions internally.
+    center: Center,
+}
+
+/// Thread safe wrapper around the core Table struct.
+/// TODO: Refactor out / remove requirement.
+#[derive(Clone)]
+pub struct Safe {
+    table: Arc<Mutex<Table>>,
     center: Center,
 }
 
@@ -86,7 +95,7 @@ impl Table {
     /// Creates a new routing table and populates the root Element
     /// with an empty Leaf / Bucket covering the entire range limit (0
     /// to 255).
-    pub fn new(limit: usize, center: Center) -> Table {
+    pub fn new(limit: usize, center: Center) -> Self {
         Table {
             root: Element::Leaf(
                 Bucket::new(limit),
@@ -246,6 +255,69 @@ impl Table {
 
     /// Return the Address of the Center. Shorthand for the public
     /// field.
+    pub fn center(&self) -> Address {
+        self.center.public.clone()
+    }
+}
+
+impl Safe {
+    pub fn new(limit: usize, center: Center) -> Self {
+        Self {
+            table: Arc::new(Mutex::new(Table::new(limit, center.clone()))),
+            center: center,
+        }
+    }
+
+    pub fn try_add(&self, node: Node) -> Result<(), Error> {
+        let mut table = self.table.lock().unwrap();
+        (*table).root.try_add(node, &self.center)
+    }
+
+    pub fn add(&self, node: Node) {
+        let mut table = self.table.lock().unwrap();
+        (*table).root.add(node, &self.center);
+    }
+
+    pub fn remove(&self, address: &Address) -> Result<(), Error> {
+        let mut table = self.table.lock().unwrap();
+        (*table).root.remove(address, &self.center)
+    }
+
+    pub fn get_copy(&self, address: &Address, limit: usize) -> Vec<Node> {
+        let table = self.table.lock().unwrap();
+        let found = (*table).root.get(address, &self.center, limit);
+        let mut nodes = Vec::new();
+        for node in found {
+            nodes.push(node.clone())
+        }
+        return nodes;
+    }
+
+    pub fn capacity(&self) -> usize {
+        let table = self.table.lock().unwrap();
+        (*table).root.capacity()
+    }
+
+    pub fn status(&self, address: &Address, status: bool) {
+        let mut table = self.table.lock().unwrap();
+        (*table).status(address, status);
+    }
+
+    pub fn len(&self) -> usize {
+        let table = self.table.lock().unwrap();
+        (*table).root.len()
+    }
+
+    pub fn export(&self) -> Vec<u8> {
+        let table = self.table.lock().unwrap();
+        (*table).export()
+    }
+
+    pub fn should_be_local(&self, address: &Address) -> bool {
+        let table = self.table.lock().unwrap();
+        (*table).should_be_local(address)
+    }
+
     pub fn center(&self) -> Address {
         self.center.public.clone()
     }
@@ -1298,6 +1370,33 @@ mod tests {
             None => false,
         };
         assert_eq!(res, true);
+    }
+
+    #[test]
+    fn test_safe_multi() {
+        let center = gen_center();
+        let safe = Safe::new(10, center);
+        let inner = safe.clone();
+        std::thread::spawn(move || {
+            let node = gen_node("first");
+            inner.add(node);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(42));
+        assert_eq!(safe.len(), 1);
+    }
+
+    #[test]
+    fn test_safe_random() {
+        let center = gen_center();
+        let safe = Safe::new(100, center);
+        let inner = safe.clone();
+        std::thread::spawn(move || {
+            for i in 0..100 {
+                inner.add(gen_node(&i.to_string()))
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(42));
+        assert_eq!(safe.len(), 100);
     }
 
     fn gen_split() -> Split {

@@ -7,7 +7,8 @@
 use crate::error::Error;
 use crate::node::Address;
 use crate::node::{Center, Node};
-use crate::transaction::Wire;
+use crate::router::Safe;
+use crate::transaction::{Transaction, Wire};
 use crate::util::{self, Channel};
 use std::cell::RefCell;
 use std::io::prelude::*;
@@ -20,24 +21,25 @@ use std::thread;
 pub struct Listener {
     listener: TcpListener,
     connections: RefCell<ConnectionBucket>,
-    channel: Channel<Wire>,
-    secondary: Channel<Node>,
+    channel: Channel<HandlerAction>,
     limit: usize,
+    table: Safe,
 }
 
 struct Connection {
     address: Address,
-    channel: Channel<Action>,
+    channel: Channel<HandlerAction>,
 }
 
 struct Handler {
-    address: Address,
-    channel: Channel<Action>,
+    channel: Channel<HandlerAction>,
     socket: TcpStream,
 }
 
-enum Action {
+#[derive(Clone, Debug, PartialEq)]
+pub enum HandlerAction {
     Message(Wire),
+    Incoming(Transaction),
     Shutdown,
 }
 
@@ -49,11 +51,10 @@ impl Connection {
     fn new(address: Address, socket: TcpStream) -> (Self, Handler) {
         let (c1, c2) = Channel::new();
         let connection = Connection {
-            address: address.clone(),
+            address,
             channel: c1,
         };
         let handler = Handler {
-            address,
             channel: c2,
             socket,
         };
@@ -62,7 +63,7 @@ impl Connection {
 
     /// Since there is no reason to use a blocking function on the
     /// Connection directly only the non-blocking function is exposed.
-    fn try_recv(&self) -> Option<Action> {
+    fn try_recv(&self) -> Option<HandlerAction> {
         self.channel.try_recv()
     }
 
@@ -76,9 +77,9 @@ impl Listener {
     /// center.
     pub fn new(
         center: Center,
-        channel: Channel<Wire>,
-        secondary: Channel<Node>,
+        channel: Channel<HandlerAction>,
         limit: usize,
+        table: Safe,
     ) -> Result<Self, Error> {
         let listener = TcpListener::bind(center.link.to_string())?;
         listener.set_nonblocking(true)?;
@@ -87,8 +88,8 @@ impl Listener {
             connections: RefCell::new(ConnectionBucket::new()),
             channel,
             // TODO: Temp for testing, replace with Channel to -->?
-            secondary,
             limit,
+            table,
         };
         Ok(listener)
     }
@@ -96,14 +97,14 @@ impl Listener {
     pub fn start(self) {
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
-            if let Some(wire) = self.channel.try_recv() {
+            if let Some(action) = self.channel.try_recv() {
                 // TODO: Lookup targets from RT
                 let targets: Vec<Node> = vec![];
                 for node in targets {
                     let target = node.address.clone();
                     match self.connections.borrow().get(&target) {
                         Some(conn) => {
-                            let _ = conn.channel.send(Action::Message(wire.clone()));
+                            let _ = conn.channel.send(action.clone());
                         }
                         None => {
                             // TODO: Handle outgoing
@@ -120,9 +121,8 @@ impl Listener {
                         Ok((wire, node)) => {
                             let address = node.address.clone();
                             // TODO: Handle error
-                            let _ = self.channel.send(wire);
-                            // TODO: Replace with Arc Mutex RT
-                            let _ = self.secondary.send(node);
+                            let _ = self.channel.send(HandlerAction::Message(wire));
+                            // TODO: Integrate RT
                             // Check if still space available.
                             if self.connections.borrow().len() >= self.limit {
                                 // No space => drop conn.
@@ -147,12 +147,15 @@ impl Listener {
             for conn in self.connections.borrow().connections.iter() {
                 if let Some(action) = conn.try_recv() {
                     match action {
-                        Action::Message(wire) => {
+                        HandlerAction::Message(wire) => {
                             // TODO: Handle easy Kademlia cases.
                             // TODO: Handle error / thread crash.
-                            let _ = self.channel.send(wire);
+                            let _ = self.channel.send(HandlerAction::Message(wire));
                         }
-                        Action::Shutdown => {
+                        HandlerAction::Incoming(transaction) => {
+                            // TODO: Handle transaction
+                        }
+                        HandlerAction::Shutdown => {
                             let addr = conn.address();
                             self.connections.borrow_mut().remove(&addr);
                         }
@@ -219,21 +222,24 @@ impl Handler {
             loop {
                 // Incoming TCP
                 if let Ok(wire) = Handler::message(&mut self.socket) {
-                    let _ = self.channel.send(Action::Message(wire));
+                    let _ = self.channel.send(HandlerAction::Message(wire));
                 } else {
                 }
 
                 // Channel messages
                 if let Some(action) = self.channel.try_recv() {
                     match action {
-                        Action::Message(wire) => {
+                        HandlerAction::Message(wire) => {
                             let e = self.socket.write(&wire.as_bytes());
                             if e.is_err() {
-                                let _ = self.channel.send(Action::Shutdown);
+                                let _ = self.channel.send(HandlerAction::Shutdown);
                                 break;
                             }
                         }
-                        Action::Shutdown => {
+                        HandlerAction::Incoming(transaction) => {
+                            // TODO: Handle transaction => distribute
+                        }
+                        HandlerAction::Shutdown => {
                             break;
                         }
                     }
@@ -320,8 +326,8 @@ mod tests {
         let (_, s) = box_::gen_keypair();
         let center = Center::new(s, String::from("127.0.0.1"), 42434);
         let (c1, _) = Channel::new();
-        let (c2, _) = Channel::new();
-        let h = Listener::new(center, c1, c2, 42).unwrap();
+        let table = Safe::new(42, center.clone());
+        let h = Listener::new(center, c1, 42, table).unwrap();
         assert_eq!(
             h.listener.local_addr().unwrap().ip().to_string(),
             String::from("127.0.0.1")

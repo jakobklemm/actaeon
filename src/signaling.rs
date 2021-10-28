@@ -6,161 +6,165 @@
 use crate::config::Config;
 use crate::message::Message;
 use crate::node::Address;
+use crate::router::Safe;
 use crate::transaction::{Class, Transaction};
+use crate::util::Channel;
+use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 pub struct Signaling {
     server: String,
     port: usize,
-    pub queue: ActionBucket,
+    channel: Channel<SignalingAction>,
     last: SystemTime,
+    table: Safe,
+    bucket: RefCell<ActionBucket>,
 }
 
-#[derive(Eq, PartialEq)]
-pub struct Action {
-    created: SystemTime,
-    last: SystemTime,
+#[derive(Eq, PartialEq, Clone)]
+pub struct SignalingAction {
     action: Type,
     target: Address,
     uuid: Uuid,
 }
 
-#[derive(Clone)]
 pub struct ActionBucket {
-    actions: Arc<Mutex<Vec<Action>>>,
+    actions: Vec<SignalingAction>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Clone)]
 pub enum Type {
     Ping,
+    Pong,
     Lookup,
+    Details,
 }
 
 impl Signaling {
-    pub fn new(config: Config, queue: ActionBucket) -> Self {
+    pub fn new(config: Config, channel: Channel<SignalingAction>, table: Safe) -> Self {
         Self {
             server: config.signaling,
             port: config.port,
-            queue,
+            channel,
             last: SystemTime::now(),
+            table,
+            bucket: RefCell::new(ActionBucket::new()),
         }
     }
 
-    pub fn start(mut self) {
+    pub fn start(self) {
         thread::spawn(move || {
             // TODO: Bootstrapping
             loop {
-                if self.queue.len() == 0 {
-                    // Do a action every two minutes.
-                    if self.last.elapsed().unwrap() >= Duration::new(120, 0) {
-                        self.last = SystemTime::now();
-                        // select a random node, get the closes few to it,
-                        // look for Link None nodes and perform a lookup
-                        // on them.
+                // 1. Try to read from Channel for new Actions.
+                if let Some(action) = self.channel.try_recv() {
+                    match action.action {
+                        Type::Ping => {
+                            // Unable to handle
+                        }
+                        Type::Pong => {
+                            self.table.status(&action.target, true);
+                            self.bucket.borrow_mut().remove(action.uuid);
+                        }
+                        Type::Lookup => {
+                            self.bucket.borrow_mut().add(action);
+                        }
+                        Type::Details => {
+                            // TODO: Add lookup result to RT
+                            self.bucket.borrow_mut().remove(action.uuid);
+                        }
                     }
+                }
+
+                // 2. Process an item from the Bucket.
+                if self.last.elapsed().unwrap() >= Duration::new(60, 0) {
+                    if let Some(action) = self.bucket.borrow().get() {
+                        let _ = self.channel.send(action.clone());
+                    }
+                }
+
+                if self.bucket.borrow().len() == 0 {
+                    let action = SignalingAction::new(Type::Lookup, Address::random());
+                    self.bucket.borrow_mut().add(action);
                 }
             }
         });
     }
 }
 
-impl Action {
+impl SignalingAction {
     pub fn new(action: Type, target: Address) -> Self {
         Self {
-            created: SystemTime::now(),
-            last: SystemTime::now(),
             action,
             target,
             uuid: Uuid::new_v4(),
         }
     }
 
+    pub fn pong(uuid: Uuid) -> Self {
+        Self {
+            action: Type::Pong,
+            // Target is irrelevant, only the UUID matters.
+            target: Address::random(),
+            uuid,
+        }
+    }
+
     // Shorthand function for creating a lookup Action.
     pub fn lookup(target: Address) -> Self {
         Self {
-            created: SystemTime::now(),
-            last: SystemTime::now(),
             action: Type::Lookup,
             target,
             uuid: Uuid::new_v4(),
         }
+    }
+
+    pub fn to_transaction(&self, center: &Address) -> Transaction {
+        let class = match self.action {
+            Type::Lookup => Class::Lookup,
+            Type::Details => Class::Details,
+            Type::Ping => Class::Ping,
+            Type::Pong => Class::Pong,
+        };
+        let body = Vec::new();
+        Transaction::new(Message::new(
+            class,
+            center.clone(),
+            self.target.clone(),
+            body,
+        ))
     }
 }
 
 impl ActionBucket {
     pub fn new() -> Self {
         Self {
-            actions: Arc::new(Mutex::new(Vec::new())),
+            actions: Vec::new(),
         }
     }
 
-    pub fn get(&self) {
-        match self.actions.lock() {
-            Ok(mut actions) => {
-                actions.sort();
-            }
-            Err(e) => {
-                log::error!("one of the threads might have crashed: {}", e);
-            }
-        }
+    pub fn get(&self) -> Option<&SignalingAction> {
+        self.actions.get(0)
     }
 
-    pub fn add(&mut self, action: Action) {
-        if let Ok(actions) = self.actions.lock() {
-            let index = actions.iter().position(|e| e.uuid == action.uuid);
-            if index.is_none() {
-                self.actions.lock().unwrap().push(action)
-            }
-        } else {
-            log::error!("one of the threads might have crashed.");
-        }
-    }
-
-    pub fn sort(&mut self) {
-        match self.actions.lock() {
-            Ok(mut actions) => {
-                actions.sort();
-            }
-            Err(e) => {
-                log::error!("one of the threads might have crashed: {:?}", e);
-            }
+    pub fn add(&mut self, action: SignalingAction) {
+        let index = self.actions.iter().position(|e| e.uuid == action.uuid);
+        if index.is_none() {
+            self.actions.push(action)
         }
     }
 
     pub fn remove(&mut self, uuid: Uuid) {
-        if let Ok(mut actions) = self.actions.lock() {
-            let index = actions.iter().position(|e| e.uuid == uuid);
-            if index.is_none() {
-                actions.remove(index.unwrap());
-            }
-        } else {
-            log::error!("one of the threads might have crashed.");
+        let index = self.actions.iter().position(|e| e.uuid == uuid);
+        if index.is_none() {
+            self.actions.remove(index.unwrap());
         }
     }
 
     pub fn len(&self) -> usize {
-        if let Ok(actions) = self.actions.lock() {
-            actions.len()
-        } else {
-            0
-            //log::error!("one of the threads might have crashed.");
-        }
-    }
-}
-
-impl PartialOrd for Action {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.last.cmp(&other.last))
-    }
-}
-
-impl Ord for Action {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.last.cmp(&other.last)
+        self.actions.len()
     }
 }

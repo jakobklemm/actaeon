@@ -3,8 +3,6 @@
 Distributed PubSub and messaging protocol for decentralized real time
 applications.
 
-TOOD: Test performance of both TCP and UPD, fully switch to the faster
-except for constant connections.
 * Goals
 - To provide a simple, easy to use library for general purpose
   decentralized networking.

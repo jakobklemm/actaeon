@@ -6,16 +6,16 @@
 //! supposed to be more modularized. Instead it handles the thread and
 //! the cache, each protocol then has its own module.
 
-use crate::config::Config;
 use crate::error::Error;
-use crate::interface::Interface;
+use crate::handler::{HandlerAction, Listener};
+use crate::interface::InterfaceAction;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
 use crate::router::Table;
-use crate::signaling::{Action, ActionBucket};
+use crate::signaling::SignalingAction;
 use crate::topic::Topic;
 use crate::topic::{Record, RecordBucket, TopicBucket};
-use crate::transaction::{Class, Transaction};
+use crate::transaction::{Class, Transaction, Wire};
 use crate::util::Channel;
 use std::cell::RefCell;
 use std::thread;
@@ -67,19 +67,13 @@ pub enum SystemAction {
 /// server, which will autoamtically get started. The thread will hold
 /// a Switch object and send messages through the channel.
 pub struct Switch {
-    /// mpsc sender component to send incoming messages to the user.
-    /// This will only be done for messages that are intended for the
-    /// user, not forwarded messages in the Kademlia system. Since
-    /// both directions are needed, the two channels are abstracted
-    /// through a dedicated object, which handles both.
-    channel: Channel<Command>,
+    listener: Channel<HandlerAction>,
+    interface: Channel<InterfaceAction>,
+    signaling: Channel<SignalingAction>,
     /// New transactions that are intended for the user will be
     /// checked against the cache to see if they are duplicates.
     /// TODO: Define term for "messages intended for the user"
     cache: RefCell<Cache>,
-    /// Represents the TCP Handler, currently just one struct. Later
-    /// this will be replaced by a trait Object.
-    handler: Handler,
     /// Each Message will be sent out multiple times to ensure
     /// delivery, currently it is simply hard coded.
     replication: usize,
@@ -89,7 +83,8 @@ pub struct Switch {
     table: RefCell<Table>,
     /// Holds a list of all currently active topics. The data is in a
     /// RefCell in order to make interactions in the Thread closure
-    /// easier.
+    /// easier. A Topic means a non-"should be local" Address
+    /// subscribed to by the user.
     topics: RefCell<TopicBucket>,
     /// Topics that aren't created / managed by the user, rather are
     /// part of the Kademlia system. Since the Addresses of Topics
@@ -100,8 +95,6 @@ pub struct Switch {
     records: RefCell<RecordBucket>,
     /// Another copy of the Center data used for generating messages.
     center: Center,
-    /// Queue of actions for the signaling thread.
-    queue: ActionBucket,
 }
 
 /// A cache of recent Transaction. Since each message might get
@@ -128,24 +121,27 @@ struct Cache {
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
-    pub fn new(center: Center, config: Config, limit: usize) -> Result<(Switch, Interface), Error> {
-        let (c1, c2) = Channel::<Command>::new();
+    pub fn new(
+        listener: Channel<HandlerAction>,
+        interface: Channel<InterfaceAction>,
+        signaling: Channel<SignalingAction>,
+        center: Center,
+        replication: usize,
+        limit: usize,
+    ) -> Result<Self, Error> {
         let cache = Cache::new(limit);
-        let queue = ActionBucket::new();
-        let handler = Handler::new(center.clone())?;
         let switch = Switch {
-            channel: c1,
+            listener,
+            interface,
+            signaling,
             cache: RefCell::new(cache),
-            handler: handler,
-            replication: config.replication,
+            replication,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
             records: RefCell::new(RecordBucket::new(center.clone())),
-            center: center.clone(),
-            queue: queue.clone(),
+            center: center,
         };
-        let interface = Interface::new(config, center).unwrap();
-        Ok((switch, interface))
+        Ok(switch)
     }
 
     /// The switch is responsible for deciding where specific messages
@@ -153,7 +149,26 @@ impl Switch {
     /// almost all Channels in the system and can send messages to any
     /// sink.
     pub fn start(mut self) {
-        thread::spawn(move || loop {});
+        thread::spawn(move || {
+            // There is currently no method of restarting each of the
+            // threads, all of them simply consist of a while true
+            // loop listening on a number of sources.
+            loop {
+                // 1. Listen on Interface Channel.
+                if let Some(action) = self.interface.try_recv() {
+                    match action {
+                        InterfaceAction::Shutdown => {
+                            log::info!("received shutdown command, terminating Switch.");
+                            break;
+                        }
+                        InterfaceAction::Message(transaction) => {}
+                        InterfaceAction::Subscribe(addr) => {}
+                    }
+                }
+                // 2. Listen on Signaling Channel.
+                // 3. Listen on Handler Channel.
+            }
+        });
     }
 }
 
@@ -215,8 +230,6 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Link;
-
     use crate::message::Message;
     use crate::node::Address;
     use crate::transaction::Class;
@@ -262,55 +275,6 @@ mod tests {
         assert_eq!(m.is_none(), false);
     }
 
-    #[test]
-    fn test_parse_bulk() {
-        let node = Node::new(gen_center().public.clone(), Some(gen_center().link));
-        let mut node_bytes = Vec::new();
-        vec![gen_node("abc"), gen_node("def")].iter().for_each(|x| {
-            node_bytes.append(&mut x.address.as_bytes().to_vec());
-        });
-
-        let mut bytes = Vec::new();
-        bytes.append(&mut node.as_bytes());
-        bytes.append(&mut node_bytes);
-
-        let mut center_address = [0; 32];
-        let mut center_link_length: u8 = 0;
-        let mut center_link: Vec<u8> = vec![center_link_length];
-        let mut table: Vec<u8> = Vec::new();
-        if bytes.len() <= 32 {
-            log::warn!("received invalid Bulk data: {:?}", bytes);
-        }
-
-        for (i, j) in bytes.iter().enumerate() {
-            if i <= 31 {
-                center_address[i] = *j;
-            } else if i == 32 {
-                center_link_length = *j;
-            } else if i > 32 && i < (32 + center_link_length).into() {
-                center_link.push(*j);
-            } else {
-                table.push(*j);
-            }
-        }
-
-        let center_address_parsed = Address::from_bytes(center_address).unwrap();
-        let center_link_parsed = Link::from_bytes(center_link).unwrap();
-        let nodes: Vec<Address> = table
-            .chunks_exact(32)
-            .map(|x| Address::from_slice(x).unwrap())
-            .collect();
-
-        assert_eq!(
-            bytes.chunks_exact(32).next().unwrap(),
-            gen_center().public.as_bytes().to_vec()
-        );
-        //assert_eq!(bytes[32] + 1, gen_center().link.as_bytes().len() as u8);
-        assert_eq!(center_address_parsed, gen_center().public);
-        assert_eq!(center_link_parsed, gen_center().link);
-        assert_eq!(nodes.first().unwrap().clone(), gen_node("abc").address);
-    }
-
     fn transaction() -> Transaction {
         let message = Message::new(
             Class::Ping,
@@ -320,19 +284,5 @@ mod tests {
         );
         let t = Transaction::new(message);
         return t;
-    }
-
-    fn gen_node(s: &str) -> Node {
-        Node::new(Address::generate(s).unwrap(), None)
-    }
-
-    use crate::node::Center;
-    use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
-
-    fn gen_center() -> Center {
-        let mut b = [0; 32];
-        b[0] = 42;
-        let s = SecretKey::from_slice(&b).unwrap();
-        Center::new(s, String::from(""), 8080)
     }
 }
