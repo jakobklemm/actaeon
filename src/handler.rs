@@ -13,7 +13,9 @@ use crate::util::{self, Channel};
 use std::cell::RefCell;
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use uuid::Uuid;
 
 /// Represents the TCP listener and exposes certain functions to
 /// interact with the outside world. They are mostly just wrappers
@@ -21,27 +23,50 @@ use std::thread;
 pub struct Listener {
     listener: TcpListener,
     connections: RefCell<ConnectionBucket>,
-    channel: Channel<HandlerAction>,
+    channel: Channel<Transaction>,
     limit: usize,
     table: Safe,
+    cache: Cache,
 }
 
 struct Connection {
     address: Address,
-    channel: Channel<HandlerAction>,
+    channel: Channel<Action>,
 }
 
 struct Handler {
-    channel: Channel<HandlerAction>,
+    channel: Channel<Action>,
     socket: TcpStream,
+    cache: Cache,
 }
 
 /// TODO: Reduce dependance on dedicated channel enums.
 #[derive(Clone, Debug, PartialEq)]
-pub enum HandlerAction {
+enum Action {
     Message(Wire),
-    Incoming(Transaction),
     Shutdown,
+}
+
+/// A cache of recent Transaction. Since each message might get
+/// received multiple times, to avoid processing it more than once a
+/// cache is introduced, that stores all recent messages. It has a
+/// maximum number of elemets, once that size has been reached the
+/// oldest elements will get dropped. This doesn't guarantee each
+/// event will only be handled once but it should prevent any
+/// duplication under good network conditions. Should a message be
+/// delayed by a lot it still possible it gets processed more than
+/// once.
+#[derive(Clone)]
+struct Cache {
+    /// All current Transactions in the cache. Instead of only storing
+    /// the messages the entire transactions will get stored, which
+    /// should make comparisons faster for larger objects. The array
+    /// will be sorted by age on every update.
+    elements: Arc<Mutex<Vec<[u8; 16]>>>,
+    /// The maximum size of the cache in number of elements. Once the
+    /// size has been reached the oldest element will get dropped to
+    /// make space for new Transactions.
+    limit: usize,
 }
 
 struct ConnectionBucket {
@@ -49,7 +74,7 @@ struct ConnectionBucket {
 }
 
 impl Connection {
-    fn new(address: Address, socket: TcpStream) -> (Self, Handler) {
+    fn new(address: Address, socket: TcpStream, cache: Cache) -> (Self, Handler) {
         let (c1, c2) = Channel::new();
         let connection = Connection {
             address,
@@ -58,13 +83,14 @@ impl Connection {
         let handler = Handler {
             channel: c2,
             socket,
+            cache,
         };
         (connection, handler)
     }
 
     /// Since there is no reason to use a blocking function on the
     /// Connection directly only the non-blocking function is exposed.
-    fn try_recv(&self) -> Option<HandlerAction> {
+    fn try_recv(&self) -> Option<Action> {
         self.channel.try_recv()
     }
 
@@ -78,7 +104,7 @@ impl Listener {
     /// center.
     pub fn new(
         center: Center,
-        channel: Channel<HandlerAction>,
+        channel: Channel<Transaction>,
         limit: usize,
         table: Safe,
     ) -> Result<Self, Error> {
@@ -86,6 +112,8 @@ impl Listener {
         listener.set_nonblocking(true)?;
         let listener = Self {
             listener,
+            // TODO: Add param
+            cache: Cache::new(100),
             connections: RefCell::new(ConnectionBucket::new()),
             channel,
             // TODO: Temp for testing, replace with Channel to -->?
@@ -98,35 +126,30 @@ impl Listener {
     pub fn start(self) {
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
-            if let Some(action) = self.channel.try_recv() {
-                match action {
-                    HandlerAction::Incoming(t) => {
-                        let target = t.target();
-                        let targets = self.table.get_copy(&target, self.limit);
-                        for node in targets {
-                            let target = node.address.clone();
-                            match self.connections.borrow().get(&target) {
-                                Some(conn) => {
-                                    let _ = conn.channel.send(HandlerAction::Incoming(t.clone()));
-                                }
-                                None => {
-                                    if self.connections.borrow().len() >= self.limit {
-                                        // TODO: Handle error
-                                        let _ = Listener::handle_single(t.clone(), node);
-                                        continue;
-                                    } else {
-                                        if let Ok(socket) = Listener::handle_active(t.clone(), node)
-                                        {
-                                            let (conn, handler) = Connection::new(target, socket);
-                                            self.connections.borrow_mut().add(conn);
-                                            Handler::spawn(handler);
-                                        }
-                                    }
+            if let Some(t) = self.channel.try_recv() {
+                let target = t.target();
+                let targets = self.table.get_copy(&target, self.limit);
+                for node in targets {
+                    let target = node.address.clone();
+                    match self.connections.borrow().get(&target) {
+                        Some(conn) => {
+                            let _ = conn.channel.send(Action::Message(t.to_wire()));
+                        }
+                        None => {
+                            if self.connections.borrow().len() >= self.limit {
+                                // TODO: Handle error
+                                let _ = Listener::handle_single(t.clone(), node);
+                                continue;
+                            } else {
+                                if let Ok(socket) = Listener::handle_active(t.clone(), node) {
+                                    let (conn, handler) =
+                                        Connection::new(target, socket, self.cache.clone());
+                                    self.connections.borrow_mut().add(conn);
+                                    Handler::spawn(handler);
                                 }
                             }
                         }
                     }
-                    _ => {}
                 }
             }
 
@@ -137,15 +160,20 @@ impl Listener {
                     match Listener::handle_establish(&mut socket) {
                         Ok((wire, node)) => {
                             let address = node.address.clone();
-                            // TODO: Handle error
-                            let _ = self.channel.send(HandlerAction::Message(wire));
+                            // TODO: Handle error (unlikely but possible)
+                            if !self.cache.exists(&wire.uuid) {
+                                self.cache.add(&wire.uuid);
+                                let t = Transaction::from_wire(&wire).unwrap();
+                                let _ = self.channel.send(t);
+                            }
                             // TODO: Integrate RT
                             // Check if still space available.
                             if self.connections.borrow().len() >= self.limit {
                                 // No space => drop conn.
                                 continue;
                             }
-                            let (connection, handler) = Connection::new(address, socket);
+                            let (connection, handler) =
+                                Connection::new(address, socket, self.cache.clone());
                             self.connections.borrow_mut().add(connection);
                             Handler::spawn(handler);
                         }
@@ -163,15 +191,13 @@ impl Listener {
             for conn in self.connections.borrow().connections.iter() {
                 if let Some(action) = conn.try_recv() {
                     match action {
-                        HandlerAction::Message(wire) => {
+                        Action::Message(wire) => {
                             // TODO: Handle easy Kademlia cases.
                             // TODO: Handle error / thread crash.
-                            let _ = self.channel.send(HandlerAction::Message(wire));
+                            let t = Transaction::from_wire(&wire).unwrap();
+                            let _ = self.channel.send(t);
                         }
-                        HandlerAction::Incoming(transaction) => {
-                            // TODO: Handle transaction
-                        }
-                        HandlerAction::Shutdown => {
+                        Action::Shutdown => {
                             let addr = conn.address();
                             self.connections.borrow_mut().remove(&addr);
                         }
@@ -268,24 +294,27 @@ impl Handler {
             loop {
                 // Incoming TCP
                 if let Ok(wire) = Handler::message(&mut self.socket) {
-                    let _ = self.channel.send(HandlerAction::Message(wire));
-                } else {
+                    if !self.cache.exists(&wire.uuid) {
+                        self.cache.add(&wire.uuid);
+                        let _ = self.channel.send(Action::Message(wire));
+                    }
                 }
 
                 // Channel messages
                 if let Some(action) = self.channel.try_recv() {
                     match action {
-                        HandlerAction::Message(wire) => {
-                            let e = self.socket.write(&wire.as_bytes());
-                            if e.is_err() {
-                                let _ = self.channel.send(HandlerAction::Shutdown);
-                                break;
+                        Action::Message(wire) => {
+                            if !self.cache.exists(&wire.uuid) {
+                                self.cache.add(&wire.uuid);
+                                // message
+                                let e = self.socket.write(&wire.as_bytes());
+                                if e.is_err() {
+                                    let _ = self.channel.send(Action::Shutdown);
+                                    break;
+                                }
                             }
                         }
-                        HandlerAction::Incoming(transaction) => {
-                            // TODO: Handle transaction => distribute
-                        }
-                        HandlerAction::Shutdown => {
+                        Action::Shutdown => {
                             break;
                         }
                     }
@@ -302,7 +331,6 @@ impl Handler {
                 "Received invalid header data!",
             )));
         }
-        println!("received header data: {:?}", header);
         let length = util::get_length(&header);
         let mut body: Vec<u8> = vec![0; length];
         socket.read_exact(&mut body)?;
@@ -362,6 +390,56 @@ impl ConnectionBucket {
     }
 }
 
+impl Cache {
+    /// Creates a new empty cache with a fixed size limit. In the
+    /// future it might be helpful to dynamically change the cache
+    /// limit, currently that is not implemented.
+    fn new(limit: usize) -> Self {
+        Self {
+            elements: Arc::new(Mutex::new(Vec::new())),
+            limit,
+        }
+    }
+
+    /// Adds a new element to the cache. If the cache is full the
+    /// oldest element will get removed and the new element gets
+    /// added.
+    fn add(&self, uuid: &[u8; 16]) {
+        let mut cache = self.elements.lock().unwrap();
+        (*cache).push(uuid.clone());
+        (*cache).truncate(self.limit);
+    }
+
+    /// Clears the cache.
+    fn empty(&self) {
+        let mut cache = self.elements.lock().unwrap();
+        *cache = Vec::new();
+    }
+
+    /// Checks if a transaction is already in the cache.
+    fn exists(&self, id: &[u8; 16]) -> bool {
+        match self.find(id) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Returns a pointer to a transaction should the same uuid be
+    /// stored in the cache. In the future the entire cache could get
+    /// restructured to only keep track of uuids.
+    fn find(&self, id: &[u8; 16]) -> Option<[u8; 16]> {
+        let cache = self.elements.lock().unwrap();
+        let index = (*cache).iter().position(|uuid| uuid == id);
+        match index {
+            Some(i) => {
+                let elem = (*cache).get(i).unwrap();
+                return Some(elem.clone());
+            }
+            None => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,4 +457,6 @@ mod tests {
             String::from("127.0.0.1")
         );
     }
+
+    // Most testing done in tests/
 }

@@ -1,4 +1,4 @@
-use actaeon::handler::{HandlerAction, Listener};
+use actaeon::handler::Listener;
 use actaeon::message::Message;
 use actaeon::node::{Address, Center, Node};
 use actaeon::router::Safe;
@@ -41,8 +41,8 @@ fn test_tcp_init() {
     let _ = conn.write(&node.as_bytes());
 
     // verify
-    let recv_wire = w2.recv().unwrap();
-    assert_eq!(recv_wire, HandlerAction::Message(wire));
+    let recv = w2.recv().unwrap();
+    assert_eq!(t, recv);
 }
 
 #[test]
@@ -91,7 +91,55 @@ fn test_tcp_message() {
     let wire = t.to_wire();
     let _ = conn.write(&wire.as_bytes());
     let ret = w2.recv().unwrap();
-    assert_eq!(ret, HandlerAction::Message(wire));
+    assert_eq!(t, ret);
+}
+
+#[test]
+fn test_tcp_cache() {
+    let (w1, w2) = Channel::new();
+    let (_, secret) = box_::gen_keypair();
+    let center = Center::new(secret, String::from("127.0.0.1"), 42431);
+    let table = Safe::new(42, center.clone());
+    let listener = Listener::new(center, w1, 10, table).unwrap();
+    let _ = listener.start();
+
+    // message
+    let message = Message::new(
+        Class::Action,
+        Address::random(),
+        Address::random(),
+        String::from("test body").as_bytes().to_vec(),
+    );
+    let t = Transaction::new(message);
+    let wire = t.to_wire();
+
+    // remote
+    let (_, secret) = box_::gen_keypair();
+    let remote = Center::new(secret, String::from("8.8.8.8"), 12345);
+    let link = remote.link.clone();
+    let node = Node::new(remote.public.clone(), Some(link));
+    let mut conn = TcpStream::connect("127.0.0.1:42431").unwrap();
+    let _ = conn.write(&wire.as_bytes());
+    let _ = conn.write(&node.as_bytes());
+
+    let _ = w2.recv();
+
+    // At this point the connection is general purpose and
+    // bidirectional.
+
+    let message = Message::new(
+        Class::Action,
+        Address::random(),
+        Address::random(),
+        "message".to_string().as_bytes().to_vec(),
+    );
+    let t = Transaction::new(message);
+    let wire = t.to_wire();
+    let _ = conn.write(&wire.as_bytes());
+    let _ = conn.write(&wire.as_bytes());
+    let _ = w2.recv().unwrap();
+    let ret = w2.try_recv();
+    assert_eq!(ret, None);
 }
 
 #[test]
@@ -138,7 +186,7 @@ fn test_tcp_random() {
         let wire = t.to_wire();
         let _ = conn.write(&wire.as_bytes());
         let ret = w2.recv().unwrap();
-        assert_eq!(ret, HandlerAction::Message(wire));
+        assert_eq!(ret, t);
     }
 }
 
@@ -170,8 +218,8 @@ fn test_tcp_outgoing() {
     );
     let t = Transaction::new(message);
 
-    let _ = r2.send(HandlerAction::Incoming(t.clone()));
+    let _ = r2.send(t.clone());
     let rett = w2.recv().unwrap();
 
-    assert_eq!(rett, HandlerAction::Message(t.to_wire()));
+    assert_eq!(rett, t);
 }

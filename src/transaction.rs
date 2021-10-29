@@ -131,6 +131,15 @@ impl Transaction {
         }
     }
 
+    /// Simple shorthand function for creating a Transaction from an
+    /// existing Wire. It currently is highly memory inefficient,
+    /// since it simply converts the Wire to bytes and turns those
+    /// into a Transaction.
+    pub fn from_wire(wire: &Wire) -> Result<Transaction, Error> {
+        let bytes = wire.as_bytes();
+        Transaction::from_bytes(&bytes)
+    }
+
     /// Convert a Transaction into bytes, to be sent over the wire.
     /// This is a shortcut without interfacing with the Wire struct
     /// directly.

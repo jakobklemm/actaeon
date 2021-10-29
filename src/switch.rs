@@ -7,7 +7,6 @@
 //! the cache, each protocol then has its own module.
 
 use crate::error::Error;
-use crate::handler::{HandlerAction, Listener};
 use crate::interface::InterfaceAction;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
@@ -67,13 +66,9 @@ pub enum SystemAction {
 /// server, which will autoamtically get started. The thread will hold
 /// a Switch object and send messages through the channel.
 pub struct Switch {
-    listener: Channel<HandlerAction>,
+    listener: Channel<Transaction>,
     interface: Channel<InterfaceAction>,
     signaling: Channel<SignalingAction>,
-    /// New transactions that are intended for the user will be
-    /// checked against the cache to see if they are duplicates.
-    /// TODO: Define term for "messages intended for the user"
-    cache: RefCell<Cache>,
     /// Each Message will be sent out multiple times to ensure
     /// delivery, currently it is simply hard coded.
     replication: usize,
@@ -97,44 +92,21 @@ pub struct Switch {
     center: Center,
 }
 
-/// A cache of recent Transaction. Since each message might get
-/// received multiple times, to avoid processing it more than once a
-/// cache is introduced, that stores all recent messages. It has a
-/// maximum number of elemets, once that size has been reached the
-/// oldest elements will get dropped. This doesn't guarantee each
-/// event will only be handled once but it should prevent any
-/// duplication under good network conditions. Should a message be
-/// delayed by a lot it still possible it gets processed more than
-/// once.
-struct Cache {
-    /// All current Transactions in the cache. Instead of only storing
-    /// the messages the entire transactions will get stored, which
-    /// should make comparisons faster for larger objects. The array
-    /// will be sorted by age on every update.
-    elements: Vec<Transaction>,
-    /// The maximum size of the cache in number of elements. Once the
-    /// size has been reached the oldest element will get dropped to
-    /// make space for new Transactions.
-    limit: usize,
-}
-
 impl Switch {
     /// Creates a new (Switch, Interface) combo, creating the Cache
     /// and staritng the channel.
     pub fn new(
-        listener: Channel<HandlerAction>,
+        listener: Channel<Transaction>,
         interface: Channel<InterfaceAction>,
         signaling: Channel<SignalingAction>,
         center: Center,
         replication: usize,
         limit: usize,
     ) -> Result<Self, Error> {
-        let cache = Cache::new(limit);
         let switch = Switch {
             listener,
             interface,
             signaling,
-            cache: RefCell::new(cache),
             replication,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
@@ -169,120 +141,5 @@ impl Switch {
                 // 3. Listen on Handler Channel.
             }
         });
-    }
-}
-
-impl Cache {
-    /// Creates a new empty cache with a fixed size limit. In the
-    /// future it might be helpful to dynamically change the cache
-    /// limit, currently that is not implemented.
-    fn new(limit: usize) -> Self {
-        Self {
-            elements: Vec::new(),
-            limit,
-        }
-    }
-
-    /// Takes a mutable reference to the cache and sorts the elements.
-    /// Transaction implements Ord based on the "created" timestamp,
-    /// which is used to sort the cache.
-    fn sort(&mut self) {
-        self.elements.sort()
-    }
-
-    /// Adds a new element to the cache. If the cache is full the
-    /// oldest element will get removed and the new element gets
-    /// added.
-    fn add(&mut self, element: Transaction) {
-        self.elements.push(element);
-        self.sort();
-        self.elements.truncate(self.limit);
-    }
-
-    /// Clears the cache.
-    fn empty(&mut self) {
-        self.elements = Vec::new();
-    }
-
-    /// Checks if a transaction is already in the cache.
-    fn exists(&self, id: [u8; 16]) -> bool {
-        match self.find(id) {
-            Some(_) => true,
-            None => false,
-        }
-    }
-
-    /// Returns a pointer to a transaction should the same uuid be
-    /// stored in the cache. In the future the entire cache could get
-    /// restructured to only keep track of uuids.
-    fn find(&self, id: [u8; 16]) -> Option<&Transaction> {
-        let index = self
-            .elements
-            .iter()
-            .position(|t| t.uuid == uuid::Uuid::from_bytes(id));
-        match index {
-            Some(i) => self.elements.get(i),
-            None => None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::message::Message;
-    use crate::node::Address;
-    use crate::transaction::Class;
-
-    #[test]
-    fn test_cache_add() {
-        let mut c = Cache::new(42);
-        let t = transaction();
-        c.add(t);
-        assert_eq!(c.elements.len(), 1);
-    }
-
-    #[test]
-    fn test_cache_sort() {
-        let mut c = Cache::new(42);
-        let first = transaction();
-        let second = transaction();
-        c.add(second);
-        c.add(first.clone());
-        c.sort();
-        assert_eq!(c.elements[0], first);
-    }
-
-    #[test]
-    fn test_cache_limit() {
-        let mut c = Cache::new(1);
-        let first = transaction();
-        let second = transaction();
-        c.add(second);
-        c.add(first.clone());
-        assert_eq!(c.elements.len(), 1);
-    }
-
-    #[test]
-    fn test_channel() {
-        let (c1, c2) = Channel::new();
-        let t = transaction();
-        let h = std::thread::spawn(move || {
-            let _ = c1.send(Command::User(t));
-        });
-        h.join().unwrap();
-        let m = c2.recv();
-        assert_eq!(m.is_none(), false);
-    }
-
-    fn transaction() -> Transaction {
-        let message = Message::new(
-            Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            "test".to_string().as_bytes().to_vec(),
-        );
-        let t = Transaction::new(message);
-        return t;
     }
 }
