@@ -113,9 +113,6 @@ fn test_tcp_random() {
     let t = Transaction::new(message);
     let wire = t.to_wire();
 
-    // [116, 101, 115, 116, 32, 98, 111, 100, 121]
-    // [116, 101, 115, 116, 32, 98, 111, 100, 121]
-
     // remote
     let (_, secret) = box_::gen_keypair();
     let remote = Center::new(secret, String::from("8.8.8.8"), 12345);
@@ -143,4 +140,38 @@ fn test_tcp_random() {
         let ret = w2.recv().unwrap();
         assert_eq!(ret, HandlerAction::Message(wire));
     }
+}
+
+#[test]
+fn test_tcp_outgoing() {
+    let (w1, w2) = Channel::new();
+    let (_, secret) = box_::gen_keypair();
+    let lcenter = Center::new(secret, String::from("127.0.0.1"), 42427);
+    let lnode = Node::new(lcenter.public.clone(), Some(lcenter.link.clone()));
+    let ltable = Safe::new(42, lcenter.clone());
+    let llistener = Listener::new(lcenter.clone(), w1, 10, ltable).unwrap();
+    let _ = llistener.start();
+
+    // remote
+    let (r1, r2) = Channel::new();
+    let (_, secret) = box_::gen_keypair();
+    let rcenter = Center::new(secret, String::from("127.0.0.1"), 42428);
+    let rtable = Safe::new(42, rcenter.clone());
+    rtable.add(lnode);
+    let rlistener = Listener::new(rcenter.clone(), r1, 10, rtable).unwrap();
+    let _ = rlistener.start();
+
+    // message
+    let message = Message::new(
+        Class::Action,
+        rcenter.public.clone(),
+        lcenter.public.clone(),
+        String::from("test body").as_bytes().to_vec(),
+    );
+    let t = Transaction::new(message);
+
+    let _ = r2.send(HandlerAction::Incoming(t.clone()));
+    let rett = w2.recv().unwrap();
+
+    assert_eq!(rett, HandlerAction::Message(t.to_wire()));
 }

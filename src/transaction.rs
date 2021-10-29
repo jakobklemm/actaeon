@@ -73,9 +73,7 @@ pub enum Class {
     Lookup,
     /// Return value for Lookup calls.
     Details,
-    /// Message coming from a user node to the distribution node.
-    Record,
-    /// Messages coming from a distribution node to the target node.
+    /// Messages coming from a user to the target node.
     Action,
     /// Subscribe to another topic.
     Subscribe,
@@ -228,7 +226,6 @@ impl Class {
             [0, 1, 0, 1] => Ok(Self::Unsubscribe),
             [0, 1, 0, 2] => Ok(Self::Subscriber),
             [0, 1, 0, 3] => Ok(Self::Unsubscriber),
-            [1, 0, 0, 0] => Ok(Self::Record),
             [1, 0, 0, 1] => Ok(Self::Action),
             _ => Err(Error::Invalid(String::from("class serlaization invalid"))),
         }
@@ -248,7 +245,6 @@ impl Class {
             Self::Unsubscribe => [0, 1, 0, 1],
             Self::Subscriber => [0, 1, 0, 2],
             Self::Unsubscriber => [0, 1, 0, 3],
-            Self::Record => [1, 0, 0, 0],
             Self::Action => [1, 0, 0, 1],
         }
     }

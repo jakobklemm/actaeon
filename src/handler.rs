@@ -36,6 +36,7 @@ struct Handler {
     socket: TcpStream,
 }
 
+/// TODO: Reduce dependance on dedicated channel enums.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HandlerAction {
     Message(Wire),
@@ -98,18 +99,34 @@ impl Listener {
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
             if let Some(action) = self.channel.try_recv() {
-                // TODO: Lookup targets from RT
-                let targets: Vec<Node> = vec![];
-                for node in targets {
-                    let target = node.address.clone();
-                    match self.connections.borrow().get(&target) {
-                        Some(conn) => {
-                            let _ = conn.channel.send(action.clone());
-                        }
-                        None => {
-                            // TODO: Handle outgoing
+                match action {
+                    HandlerAction::Incoming(t) => {
+                        let target = t.target();
+                        let targets = self.table.get_copy(&target, self.limit);
+                        for node in targets {
+                            let target = node.address.clone();
+                            match self.connections.borrow().get(&target) {
+                                Some(conn) => {
+                                    let _ = conn.channel.send(HandlerAction::Incoming(t.clone()));
+                                }
+                                None => {
+                                    if self.connections.borrow().len() >= self.limit {
+                                        // TODO: Handle error
+                                        let _ = Listener::handle_single(t.clone(), node);
+                                        continue;
+                                    } else {
+                                        if let Ok(socket) = Listener::handle_active(t.clone(), node)
+                                        {
+                                            let (conn, handler) = Connection::new(target, socket);
+                                            self.connections.borrow_mut().add(conn);
+                                            Handler::spawn(handler);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
+                    _ => {}
                 }
             }
 
@@ -126,7 +143,6 @@ impl Listener {
                             // Check if still space available.
                             if self.connections.borrow().len() >= self.limit {
                                 // No space => drop conn.
-                                // TODO: Try if requried.
                                 continue;
                             }
                             let (connection, handler) = Connection::new(address, socket);
@@ -163,6 +179,36 @@ impl Listener {
                 }
             }
         });
+    }
+
+    fn handle_single(transaction: Transaction, node: Node) -> Result<(), Error> {
+        match node.link {
+            Some(link) => {
+                let mut connection = TcpStream::connect(link.to_string())?;
+                connection.write(&transaction.as_bytes())?;
+                // Drop connection again.
+                Ok(())
+            }
+            None => {
+                // no link exists, unable to connect.
+                return Err(Error::Connection(String::from("no link data exists")));
+            }
+        }
+    }
+
+    fn handle_active(transaction: Transaction, node: Node) -> Result<TcpStream, Error> {
+        match &node.link {
+            Some(link) => {
+                let mut connection = TcpStream::connect(link.to_string())?;
+                connection.write(&transaction.as_bytes())?;
+                connection.write(&node.as_bytes())?;
+                Ok(connection)
+            }
+            None => {
+                // no link exists, unable to connect.
+                return Err(Error::Connection(String::from("no link data exists")));
+            }
+        }
     }
 
     fn handle_establish(socket: &mut TcpStream) -> Result<(Wire, Node), Error> {
