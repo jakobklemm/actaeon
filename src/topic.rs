@@ -9,7 +9,6 @@
 
 use crate::error::Error;
 use crate::node::{Address, Center};
-use crate::switch::{Command, SystemAction};
 use crate::transaction::Transaction;
 use crate::util::Channel;
 
@@ -32,6 +31,14 @@ pub struct Topic {
     pub subscribers: SubscriberBucket,
 }
 
+pub enum Command {
+    Subscriber(Address),
+    Unsubscriber(Address),
+    Broadcast(Address, Vec<u8>),
+    Message(Transaction),
+    Drop(Address),
+}
+
 /// Wrapper structure to enable faster operations on all stored
 /// subscribers of a Topic. This object will be used in each Topic.
 #[derive(Debug, Clone)]
@@ -46,23 +53,14 @@ pub struct SubscriberBucket {
 /// implement the same methods.
 pub struct TopicBucket {
     /// List of Topics that will be stored on the Handler Thread.
-    pub topics: Vec<Topic>,
+    pub topics: Vec<Simple>,
     /// This also requires a copy of the Center.
     pub center: Center,
 }
 
-/// Dedicated struct of topics that aren't for the user but rather
-/// internally for the system. They are stored on the Handler thread and
-#[derive(Clone)]
-pub struct Record {
+pub struct Simple {
     pub address: Address,
-    pub subscribers: SubscriberBucket,
-}
-
-/// Similar to the TopicBucket but for the Handler Records.
-pub struct RecordBucket {
-    pub records: Vec<Record>,
-    pub center: Center,
+    pub channel: Channel<Command>,
 }
 
 impl Topic {
@@ -93,21 +91,15 @@ impl Topic {
         loop {
             match self.channel.recv() {
                 Some(m) => match m {
-                    Command::User(t) => {
+                    Command::Message(t) => {
                         return Some(t);
                     }
-                    Command::System(action) => match action {
-                        SystemAction::Subscriber(a) => {
-                            self.subscribers.add_bulk(a);
-                        }
-                        SystemAction::Subscribe(_topic) => {}
-                        SystemAction::Unsubscribe(a) => {
-                            let _ = self.subscribers.remove(&a);
-                        }
-                        SystemAction::Send(_, _) => {
-                            log::warn!("unable to process received message type.");
-                        }
-                    },
+                    Command::Subscriber(addr) => {
+                        self.subscribers.add(addr);
+                    }
+                    Command::Unsubscriber(addr) => {
+                        self.subscribers.remove(&addr);
+                    }
                     _ => {
                         continue;
                     }
@@ -126,21 +118,15 @@ impl Topic {
         loop {
             match self.channel.try_recv() {
                 Some(m) => match m {
-                    Command::User(t) => {
+                    Command::Message(t) => {
                         return Some(t);
                     }
-                    Command::System(action) => match action {
-                        SystemAction::Subscriber(a) => {
-                            self.subscribers.add_bulk(a);
-                        }
-                        SystemAction::Subscribe(_t) => {}
-                        SystemAction::Unsubscribe(a) => {
-                            let _ = self.subscribers.remove(&a);
-                        }
-                        SystemAction::Send(_, _) => {
-                            log::warn!("unable to process received message type.");
-                        }
-                    },
+                    Command::Subscriber(addr) => {
+                        self.subscribers.add(addr);
+                    }
+                    Command::Unsubscriber(addr) => {
+                        self.subscribers.remove(&addr);
+                    }
                     _ => {
                         continue;
                     }
@@ -160,25 +146,9 @@ impl Topic {
     /// Wire objects for a dedicated field (or to make encryption
     /// mandatory (will require more tests))).
     pub fn broadcast(&mut self, body: Vec<u8>) -> Result<(), Error> {
-        loop {
-            match self.channel.try_recv() {
-                Some(m) => match m {
-                    Command::System(action) => match action {
-                        SystemAction::Subscriber(a) => self.subscribers.add_bulk(a),
-                        SystemAction::Unsubscribe(a) => self.subscribers.remove(&a),
-                        _ => continue,
-                    },
-                    _ => continue,
-                },
-                None => {
-                    break;
-                }
-            }
-        }
-
         for sub in &self.subscribers.subscribers {
-            // TODO! Ownership issues, reduce clone calls.
-            let action = Command::System(SystemAction::Send(sub.clone(), body.clone()));
+            // TODO: Ownership issues, reduce clone calls.
+            let action = Command::Broadcast(sub.clone(), body.clone());
             let e = self.channel.send(action);
             if e.is_err() {
                 log::error!("channel is unavailable, it is possible the thread crashed.")
@@ -187,30 +157,13 @@ impl Topic {
         return Ok(());
     }
 
-    /// In the future this should be replaced by an automatic Deref
+    /// In the future this should be replaced by an automatic Drop
     /// implementation, currently a manual "unsubscribe" function is
     /// required to inform other users about the change. It simply
     /// sends an Unsubscribe action to each subscriber.
     pub fn unsubscribe(&mut self) {
-        loop {
-            match self.channel.try_recv() {
-                Some(m) => match m {
-                    Command::System(action) => match action {
-                        SystemAction::Subscriber(a) => self.subscribers.add_bulk(a),
-                        SystemAction::Unsubscribe(a) => self.subscribers.remove(&a),
-                        _ => continue,
-                    },
-                    _ => continue,
-                },
-                None => {
-                    break;
-                }
-            }
-        }
-
         for sub in &self.subscribers.subscribers {
-            // TODO! Ownership issues, reduce clone calls.
-            let action = Command::System(SystemAction::Unsubscribe(sub.clone()));
+            let action = Command::Drop(sub.clone());
             let e = self.channel.send(action);
             if e.is_err() {
                 log::error!("channel is unavailable, it is possible the thread crashed.")
@@ -221,6 +174,12 @@ impl Topic {
     /// Shorthand function to get the Address of a Topic.
     pub fn address(&self) -> Address {
         self.address.clone()
+    }
+}
+
+impl Simple {
+    pub fn new(address: Address, channel: Channel<Command>) -> Self {
+        Self { address, channel }
     }
 }
 
@@ -288,13 +247,14 @@ impl TopicBucket {
         }
     }
 
-    pub fn add(&mut self, topic: Topic) {
-        if self.find(&topic.address).is_none() {
-            self.topics.push(topic)
+    pub fn add(&mut self, simple: Simple) {
+        // strange namespace issues
+        if TopicBucket::find(&self, &simple.address).is_none() {
+            self.topics.push(simple);
         }
     }
 
-    pub fn find(&self, search: &Address) -> Option<&Topic> {
+    pub fn find(&self, search: &Address) -> Option<&Simple> {
         let index = self.topics.iter().position(|e| &e.address == search);
         match index {
             Some(i) => self.topics.get(i),
@@ -302,7 +262,7 @@ impl TopicBucket {
         }
     }
 
-    pub fn find_mut(&mut self, search: &Address) -> Option<&mut Topic> {
+    pub fn find_mut(&mut self, search: &Address) -> Option<&mut Simple> {
         let index = self.topics.iter().position(|e| &e.address == search);
         match index {
             Some(i) => self.topics.get_mut(i),
@@ -335,82 +295,10 @@ impl TopicBucket {
     }
 }
 
-impl Record {
-    pub fn new(address: Address, initial: Address) -> Self {
-        Self {
-            address,
-            subscribers: SubscriberBucket::new(vec![initial]),
-        }
-    }
-}
+impl Iterator for TopicBucket {
+    type Item = Simple;
 
-impl RecordBucket {
-    pub fn new(center: Center) -> Self {
-        Self {
-            records: Vec::new(),
-            center,
-        }
+    fn next(&mut self) -> Option<Self::Item> {
+        self.topics.pop()
     }
-
-    pub fn add(&mut self, topic: Record) {
-        if self.find(&topic.address).is_none() {
-            self.records.push(topic)
-        }
-    }
-
-    pub fn find(&self, search: &Address) -> Option<&Record> {
-        let index = self.records.iter().position(|e| &e.address == search);
-        match index {
-            Some(i) => self.records.get(i),
-            None => None,
-        }
-    }
-
-    pub fn find_copy(&self, search: &Address) -> Option<Record> {
-        let index = self.records.iter().position(|e| &e.address == search);
-        match index {
-            Some(i) => match self.records.get(i) {
-                Some(n) => Some(n.clone()),
-                None => None,
-            },
-            None => None,
-        }
-    }
-
-    pub fn find_mut(&mut self, search: &Address) -> Option<&mut Record> {
-        let index = self.records.iter().position(|e| &e.address == search);
-        match index {
-            Some(i) => self.records.get_mut(i),
-            None => None,
-        }
-    }
-
-    pub fn remove(&mut self, target: &Address) {
-        let index = self.records.iter().position(|e| &e.address == target);
-        match index {
-            Some(i) => {
-                self.records.remove(i);
-            }
-            None => {}
-        }
-    }
-
-    pub fn is_local(&self, query: &Address) -> bool {
-        if query == &self.center.public {
-            return true;
-        }
-        match self.find(query) {
-            Some(_) => true,
-            None => false,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.records.len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    //use super::*;
 }

@@ -127,29 +127,15 @@ impl Listener {
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
             if let Some(t) = self.channel.try_recv() {
-                let target = t.target();
-                let targets = self.table.get_copy(&target, self.limit);
-                for node in targets {
-                    let target = node.address.clone();
-                    match self.connections.borrow().get(&target) {
-                        Some(conn) => {
-                            let _ = conn.channel.send(Action::Message(t.to_wire()));
-                        }
-                        None => {
-                            if self.connections.borrow().len() >= self.limit {
-                                // TODO: Handle error
-                                let _ = Listener::handle_single(t.clone(), node);
-                                continue;
-                            } else {
-                                if let Ok(socket) = Listener::handle_active(t.clone(), node) {
-                                    let (conn, handler) =
-                                        Connection::new(target, socket, self.cache.clone());
-                                    self.connections.borrow_mut().add(conn);
-                                    Handler::spawn(handler);
-                                }
-                            }
-                        }
-                    }
+                let e = Listener::distribute(
+                    t,
+                    &self.table,
+                    &mut self.connections.borrow_mut(),
+                    &self.cache,
+                    self.limit,
+                );
+                if e.is_err() {
+                    log::error!("unable to distribute message: {}", e.unwrap_err());
                 }
             }
 
@@ -164,7 +150,11 @@ impl Listener {
                             if !self.cache.exists(&wire.uuid) {
                                 self.cache.add(&wire.uuid);
                                 let t = Transaction::from_wire(&wire).unwrap();
-                                let _ = self.channel.send(t);
+                                if self.table.should_be_local(&t.target()) {
+                                    let _ = self.channel.send(t);
+                                } else {
+                                    // Forward
+                                }
                             }
                             // TODO: Integrate RT
                             // Check if still space available.
@@ -205,6 +195,41 @@ impl Listener {
                 }
             }
         });
+    }
+
+    fn distribute(
+        t: Transaction,
+        table: &Safe,
+        connections: &mut ConnectionBucket,
+        cache: &Cache,
+        limit: usize,
+    ) -> Result<(), Error> {
+        let targets = table.get_copy(&t.target(), limit);
+        if targets.len() == 0 {
+            return Err(Error::System(String::from("no target nodes found.")));
+        }
+        for node in targets {
+            let target = node.address.clone();
+            match connections.get(&target) {
+                Some(conn) => {
+                    let _ = conn.channel.send(Action::Message(t.to_wire()));
+                }
+                None => {
+                    if connections.len() >= limit {
+                        // TODO: Handle error
+                        let _ = Listener::handle_single(t.clone(), node);
+                        continue;
+                    } else {
+                        if let Ok(socket) = Listener::handle_active(t.clone(), node) {
+                            let (conn, handler) = Connection::new(target, socket, cache.clone());
+                            connections.add(conn);
+                            Handler::spawn(handler);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn handle_single(transaction: Transaction, node: Node) -> Result<(), Error> {
@@ -330,6 +355,9 @@ impl Handler {
             return Err(Error::Invalid(String::from(
                 "Received invalid header data!",
             )));
+        }
+        if header == [0; 110] {
+            // TODO: bootstrapping!!
         }
         let length = util::get_length(&header);
         let mut body: Vec<u8> = vec![0; length];

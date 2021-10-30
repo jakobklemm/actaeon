@@ -5,6 +5,7 @@ use crate::error::Error;
 use crate::node::Address;
 use crate::node::Center;
 use crate::record::RecordBucket;
+use crate::topic::{Simple, Topic};
 use crate::transaction::Transaction;
 use crate::util::Channel;
 
@@ -15,12 +16,13 @@ pub struct Interface {
     /// Center used for getting message origins.
     center: Center,
     records: RecordBucket,
+    switch: Channel<InterfaceAction>,
 }
 
 pub enum InterfaceAction {
     Shutdown,
     Message(Transaction),
-    Subscribe(Address),
+    Subscribe(Simple),
 }
 
 impl Interface {
@@ -29,9 +31,19 @@ impl Interface {
     /// might have to be wrapped by a start function.
     pub fn new(config: Config, center: Center) -> Result<Self, Error> {
         let bucket = RecordBucket::new();
+        let (c1, c2) = Channel::new();
         Ok(Self {
             center,
             records: bucket,
+            switch: c1,
         })
+    }
+
+    pub fn subscribe(self, addr: Address) -> Topic {
+        let (c1, c2) = Channel::new();
+        let local = Topic::new(addr.clone(), c1, Vec::new());
+        let remote = Simple::new(addr, c2);
+        let _ = self.switch.send(InterfaceAction::Subscribe(remote));
+        local
     }
 }

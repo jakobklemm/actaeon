@@ -237,7 +237,12 @@ impl Table {
     /// Then the distances get calculated. The function returns true
     /// if the distance between the address and the Center is smaller
     /// than atleast one of the fetched Nodes.
+    /// TODO: Testing!!!
     pub fn should_be_local(&self, address: &Address) -> bool {
+        if address == &self.center.public {
+            return true;
+        }
+        // TODO: Add parameters
         let nodes = self.get(address, 5);
         let mut addrs: Vec<Address> = nodes.iter().map(|x| x.address.clone()).collect();
         addrs.push(address.clone());
@@ -246,7 +251,7 @@ impl Table {
             let right = (b.clone() ^ self.center.public.clone())[0];
             left.partial_cmp(&right).unwrap()
         });
-        let index = addrs.iter().position(|e| e == &self.center.public);
+        let index = addrs.iter().position(|e| e == address);
         match index {
             Some(i) => i <= 3,
             None => false,

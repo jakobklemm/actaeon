@@ -10,57 +10,15 @@ use crate::error::Error;
 use crate::interface::InterfaceAction;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
+use crate::record::{Record, RecordBucket};
 use crate::router::Table;
 use crate::signaling::SignalingAction;
-use crate::topic::Topic;
-use crate::topic::{Record, RecordBucket, TopicBucket};
+use crate::topic::{Command, Topic};
+use crate::topic::{Simple, TopicBucket};
 use crate::transaction::{Class, Transaction, Wire};
 use crate::util::Channel;
 use std::cell::RefCell;
 use std::thread;
-
-/// Each message being sent between the Listener Thead and User Thread
-/// is either a UserAction or a SwitchAction, only UserAction get
-/// actually passed onto the user, others are internal types for
-/// managing the thread and the channel.
-pub enum Command {
-    /// mpsc element for internal communication, like shutting down
-    /// the thread or any issues.
-    Switch(SwitchAction),
-    /// Messages coming from the network intended for the user (or the
-    /// other way around).
-    User(Transaction),
-    /// Internal messages with incomplete data, that will be completed
-    /// on the Handler Thread.
-    System(SystemAction),
-}
-
-/// A collection of possible events for the channel. These are not
-/// error messages, since they should be handled automatically, but in
-/// the future this part of the system should be made more open by
-/// using traits and giving the user the option to specify how to
-/// handle all kinds of issues and messages.
-#[derive(Debug)]
-pub enum SwitchAction {
-    /// If the network connection has been terminated or failed. This
-    /// only referres to the network connection, not the channel. It
-    /// can also be used to signal termination to the thread.
-    Terminate,
-}
-
-pub enum SystemAction {
-    /// A new topic gets created on the user thread, the channel has
-    /// to be sent to the handler thread.
-    Subscribe(Topic),
-    /// Usually coming from the Thread to the user informing them of
-    /// a new subscriber.
-    Subscriber(Vec<Address>),
-    /// Removes the topic from the tables & distributes the update.
-    Unsubscribe(Address),
-    /// Almost the same as UserAction, but in the topic the center
-    /// might be unknown, so just the body can be transfered.
-    Send(Address, Vec<u8>),
-}
 
 /// Currently the system requires a dedicated thread for the listening
 /// server, which will autoamtically get started. The thread will hold
@@ -110,7 +68,7 @@ impl Switch {
             replication,
             table: RefCell::new(Table::new(limit, center.clone())),
             topics: RefCell::new(TopicBucket::new(center.clone())),
-            records: RefCell::new(RecordBucket::new(center.clone())),
+            records: RefCell::new(RecordBucket::new()),
             center: center,
         };
         Ok(switch)
@@ -133,12 +91,109 @@ impl Switch {
                             log::info!("received shutdown command, terminating Switch.");
                             break;
                         }
-                        InterfaceAction::Message(transaction) => {}
-                        InterfaceAction::Subscribe(addr) => {}
+                        InterfaceAction::Message(transaction) => {
+                            let _ = self.listener.send(transaction);
+                        }
+                        InterfaceAction::Subscribe(simple) => {
+                            let target = simple.address.clone();
+                            self.topics.borrow_mut().add(simple);
+                            let message = Message::new(
+                                Class::Subscribe,
+                                self.center.public.clone(),
+                                target,
+                                Vec::new(),
+                            );
+                            let t = Transaction::new(message);
+                            let _ = self.listener.send(t);
+                        }
                     }
                 }
-                // 2. Listen on Signaling Channel.
-                // 3. Listen on Handler Channel.
+
+                // 2. Listen on topics Chanel.
+                for simple in &self.topics.borrow().topics {
+                    if let Some(command) = simple.channel.try_recv() {
+                        match command {
+                            Command::Drop(addr) => {
+                                // The addr is of the user to send the
+                                // unsubscribe to, not of the topic!
+                                self.topics.borrow_mut().remove(&simple.address);
+                                let message = Message::new(
+                                    Class::Unsubscribe,
+                                    self.center.public.clone(),
+                                    addr,
+                                    Vec::new(),
+                                );
+                                let t = Transaction::new(message);
+                                let _ = self.listener.send(t);
+                            }
+                            Command::Broadcast(addr, body) => {
+                                let message = Message::new(
+                                    Class::Unsubscribe,
+                                    self.center.public.clone(),
+                                    addr,
+                                    body,
+                                );
+                                let t = Transaction::new(message);
+                                let _ = self.listener.send(t);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // 3. Listen on Siganling Channel.
+                // 4. Listen on Handler Channel.
+                if let Some(t) = self.listener.try_recv() {
+                    let source = t.source();
+                    let target = t.target();
+                    if target == self.center.public {
+                        // Handle: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber
+                        // Error: Subscriber, Unsubscribe
+                        match t.class() {
+                            Class::Ping => {}
+                            Class::Pong => {}
+                            Class::Lookup => {}
+                            Class::Details => {}
+                            Class::Action => {}
+                            Class::Subscribe => {}
+                            Class::Unsubscribe => {}
+                            Class::Subscriber => {
+                                log::warn!("received message to invalid target: {:?}", t);
+                            }
+                            Class::Unsubscriber => {
+                                log::warn!("received message to invalid target: {:?}", t);
+                            }
+                        }
+                    } else {
+                        // Forward: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber,
+                        // Maybe Handle: Subscribe, Unsubscribe
+                        match t.class() {
+                            Class::Ping => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Pong => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Lookup => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Details => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Action => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Subscribe => {}
+                            Class::Unsubscribe => {}
+                            Class::Subscriber => {
+                                let _ = self.listener.send(t);
+                            }
+                            Class::Unsubscriber => {
+                                let _ = self.listener.send(t);
+                            }
+                        }
+                    }
+                }
             }
         });
     }

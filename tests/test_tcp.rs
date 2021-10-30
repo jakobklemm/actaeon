@@ -2,7 +2,7 @@ use actaeon::handler::Listener;
 use actaeon::message::Message;
 use actaeon::node::{Address, Center, Node};
 use actaeon::router::Safe;
-use actaeon::transaction::{Class, Transaction, Wire};
+use actaeon::transaction::{Class, Transaction};
 use actaeon::util::Channel;
 use sodiumoxide::crypto::box_;
 use std::io::Write;
