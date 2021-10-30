@@ -10,14 +10,11 @@ use crate::router::Safe;
 use crate::transaction::{Class, Transaction};
 use crate::util::Channel;
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::thread;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 pub struct Signaling {
-    server: String,
-    port: usize,
     channel: Channel<SignalingAction>,
     last: SystemTime,
     table: Safe,
@@ -44,10 +41,8 @@ pub enum Type {
 }
 
 impl Signaling {
-    pub fn new(config: Config, channel: Channel<SignalingAction>, table: Safe) -> Self {
+    pub fn new(channel: Channel<SignalingAction>, table: Safe) -> Self {
         Self {
-            server: config.signaling,
-            port: config.port,
             channel,
             last: SystemTime::now(),
             table,
@@ -57,7 +52,6 @@ impl Signaling {
 
     pub fn start(self) {
         thread::spawn(move || {
-            // TODO: Bootstrapping
             loop {
                 // 1. Try to read from Channel for new Actions.
                 if let Some(action) = self.channel.try_recv() {
@@ -104,11 +98,20 @@ impl SignalingAction {
         }
     }
 
-    pub fn pong(uuid: Uuid) -> Self {
+    pub fn pong(address: Address, uuid: Uuid) -> Self {
         Self {
             action: Type::Pong,
             // Target is irrelevant, only the UUID matters.
-            target: Address::random(),
+            target: address,
+            uuid,
+        }
+    }
+
+    pub fn details(address: Address, uuid: Uuid) -> Self {
+        Self {
+            action: Type::Details,
+            // Target is irrelevant, only the UUID matters.
+            target: address,
             uuid,
         }
     }
@@ -134,6 +137,7 @@ impl SignalingAction {
             class,
             center.clone(),
             self.target.clone(),
+            Address::default(),
             body,
         ))
     }

@@ -195,6 +195,47 @@ impl Node {
             Ok(Node::new(address, Some(link)))
         }
     }
+
+    pub fn from_bulk(bytes: Vec<u8>) -> Vec<Node> {
+        if bytes.len() < 34 {
+            return Vec::new();
+        } else if bytes.len() == 34 {
+            if let Ok(node) = Node::from_bytes(bytes.clone()) {
+                return vec![node];
+            }
+        }
+        recursive_parse(bytes)
+    }
+}
+
+fn recursive_parse(data: Vec<u8>) -> Vec<Node> {
+    if data.len() == 0 {
+        return Vec::new();
+    }
+    let mut len = [0; 2];
+    let mut address = [0; 32];
+    let mut link = Vec::new();
+    let mut rest = Vec::new();
+    for (i, j) in data.iter().enumerate() {
+        if i < 2 {
+            len[i] = *j;
+        } else if i >= 2 && i <= 33 {
+            address[i - 2] = *j;
+        } else if i >= 34 && i <= (34 + util::integer(len) - 1) {
+            link.push(*j);
+        } else {
+            rest.push(*j);
+        }
+    }
+    println!("data: {:?}", data);
+    println!("rest data: {:?}", rest);
+    // TODO: Handle unwrap
+    let address = Address::from_bytes(address).unwrap();
+    let link = Link::from_bytes(link).unwrap();
+    let node = Node::new(address, Some(link));
+    let mut nodes = vec![node];
+    nodes.append(&mut recursive_parse(rest));
+    return nodes;
 }
 
 impl Ord for Node {
@@ -339,6 +380,11 @@ impl Address {
             bytes[i] = rand::random::<u8>();
         }
         Address::from_bytes(bytes).unwrap()
+    }
+
+    /// Generates a new "zero" Address with all bytes being 0.
+    pub fn default() -> Address {
+        Address::from_bytes([0; 32]).unwrap()
     }
 }
 
@@ -599,5 +645,31 @@ mod tests {
         let ser = node.as_bytes();
         let len = util::length(&l.as_bytes());
         assert_eq!(ser[0..1], len[0..1]);
+    }
+
+    #[test]
+    fn test_node_bulk() {
+        let mut bytes = Vec::new();
+        let nodes = vec![gen_node(), gen_node(), gen_node()];
+        nodes.iter().for_each(|x| {
+            bytes.append(&mut x.as_bytes());
+        });
+
+        let re = Node::from_bulk(bytes);
+        assert_eq!(nodes, re);
+    }
+
+    fn gen_node() -> Node {
+        let addr = Address::random();
+        let ip = [
+            rand::random::<char>().to_string(),
+            rand::random::<char>().to_string(),
+            rand::random::<char>().to_string(),
+            rand::random::<char>().to_string(),
+            rand::random::<char>().to_string(),
+        ];
+        let ip = ip.join(".");
+        let link = Link::new(ip, rand::random());
+        Node::new(addr, Some(link))
     }
 }

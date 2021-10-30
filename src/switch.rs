@@ -7,10 +7,12 @@
 //! the cache, each protocol then has its own module.
 
 use crate::error::Error;
+use crate::handler::Listener;
 use crate::interface::InterfaceAction;
 use crate::message::Message;
 use crate::node::{Address, Center, Link, Node};
 use crate::record::{Record, RecordBucket};
+use crate::router::Safe;
 use crate::router::Table;
 use crate::signaling::SignalingAction;
 use crate::topic::{Command, Topic};
@@ -33,7 +35,7 @@ pub struct Switch {
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
-    table: RefCell<Table>,
+    table: Safe,
     /// Holds a list of all currently active topics. The data is in a
     /// RefCell in order to make interactions in the Thread closure
     /// easier. A Topic means a non-"should be local" Address
@@ -45,7 +47,7 @@ pub struct Switch {
     /// guaranteed. Instead on the correct nodes a record of that
     /// topic is kept. From there the actual distribution of messages
     /// takes place.
-    records: RefCell<RecordBucket>,
+    records: RecordBucket,
     /// Another copy of the Center data used for generating messages.
     center: Center,
 }
@@ -59,6 +61,7 @@ impl Switch {
         signaling: Channel<SignalingAction>,
         center: Center,
         replication: usize,
+        table: Safe,
         limit: usize,
     ) -> Result<Self, Error> {
         let switch = Switch {
@@ -66,9 +69,9 @@ impl Switch {
             interface,
             signaling,
             replication,
-            table: RefCell::new(Table::new(limit, center.clone())),
+            table,
             topics: RefCell::new(TopicBucket::new(center.clone())),
-            records: RefCell::new(RecordBucket::new()),
+            records: RecordBucket::new(),
             center: center,
         };
         Ok(switch)
@@ -78,7 +81,7 @@ impl Switch {
     /// go based on their origin, target and type. It listens on
     /// almost all Channels in the system and can send messages to any
     /// sink.
-    pub fn start(mut self) {
+    pub fn start(self) {
         thread::spawn(move || {
             // There is currently no method of restarting each of the
             // threads, all of them simply consist of a while true
@@ -100,6 +103,10 @@ impl Switch {
                             let message = Message::new(
                                 Class::Subscribe,
                                 self.center.public.clone(),
+                                target.clone(),
+                                // the subscribe action corresponds to
+                                // no topic, but for simplicity the
+                                // target is used twice.
                                 target,
                                 Vec::new(),
                             );
@@ -111,6 +118,7 @@ impl Switch {
 
                 // 2. Listen on topics Chanel.
                 for simple in &self.topics.borrow().topics {
+                    let topic = simple.address.clone();
                     if let Some(command) = simple.channel.try_recv() {
                         match command {
                             Command::Drop(addr) => {
@@ -121,6 +129,7 @@ impl Switch {
                                     Class::Unsubscribe,
                                     self.center.public.clone(),
                                     addr,
+                                    topic,
                                     Vec::new(),
                                 );
                                 let t = Transaction::new(message);
@@ -131,6 +140,7 @@ impl Switch {
                                     Class::Unsubscribe,
                                     self.center.public.clone(),
                                     addr,
+                                    topic,
                                     body,
                                 );
                                 let t = Transaction::new(message);
@@ -144,51 +154,47 @@ impl Switch {
                 // 3. Listen on Siganling Channel.
                 // 4. Listen on Handler Channel.
                 if let Some(t) = self.listener.try_recv() {
-                    let source = t.source();
                     let target = t.target();
                     if target == self.center.public {
                         // Handle: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber
                         // Error: Subscriber, Unsubscribe
                         match t.class() {
-                            Class::Ping => {}
-                            Class::Pong => {}
-                            Class::Lookup => {}
-                            Class::Details => {}
-                            Class::Action => {}
-                            Class::Subscribe => {}
-                            Class::Unsubscribe => {}
+                            Class::Ping => {
+                                Switch::handle_ping(t, &self.listener, &self.center);
+                            }
+                            Class::Pong => {
+                                Switch::handle_pong(t, &self.signaling);
+                            }
+                            Class::Lookup => {
+                                Switch::handle_lookup(t, &self.listener, &self.center);
+                            }
+                            Class::Details => {
+                                Switch::handle_details(t, &self.signaling, &self.table);
+                            }
+                            Class::Action => {
+                                Switch::handle_action(t, &self.topics);
+                            }
                             Class::Subscriber => {
-                                log::warn!("received message to invalid target: {:?}", t);
+                                Switch::handle_subscriber(t, &self.topics);
                             }
                             Class::Unsubscriber => {
+                                Switch::handle_unsubscriber(t, &self.topics);
+                            }
+                            _ => {
                                 log::warn!("received message to invalid target: {:?}", t);
                             }
                         }
                     } else {
-                        // Forward: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber,
-                        // Maybe Handle: Subscribe, Unsubscribe
+                        // Forward: Ping, Pong, Details, Action, Subscriber, Unsubscriber,
+                        // Maybe Handle: Subscribe, Unsubscribe, Lookup
                         match t.class() {
-                            Class::Ping => {
-                                let _ = self.listener.send(t);
+                            Class::Subscribe => {
+                                Switch::handle_subscribe(t, &self.listener, &self.records);
                             }
-                            Class::Pong => {
-                                let _ = self.listener.send(t);
+                            Class::Unsubscribe => {
+                                Switch::handle_unsubscribe(t, &self.listener, &self.records);
                             }
-                            Class::Lookup => {
-                                let _ = self.listener.send(t);
-                            }
-                            Class::Details => {
-                                let _ = self.listener.send(t);
-                            }
-                            Class::Action => {
-                                let _ = self.listener.send(t);
-                            }
-                            Class::Subscribe => {}
-                            Class::Unsubscribe => {}
-                            Class::Subscriber => {
-                                let _ = self.listener.send(t);
-                            }
-                            Class::Unsubscriber => {
+                            _ => {
                                 let _ = self.listener.send(t);
                             }
                         }
@@ -196,5 +202,130 @@ impl Switch {
                 }
             }
         });
+    }
+
+    fn handle_ping(t: Transaction, channel: &Channel<Transaction>, center: &Center) {
+        let node = Node::new(center.public.clone(), Some(center.link.clone()));
+        let message = Message::new(
+            Class::Details,
+            center.public.clone(),
+            t.source(),
+            Address::default(),
+            node.as_bytes(),
+        );
+        let transaction = Transaction::new(message);
+        let _ = channel.send(transaction);
+    }
+
+    fn handle_pong(t: Transaction, channel: &Channel<SignalingAction>) {
+        let _ = channel.send(SignalingAction::pong(t.source(), t.uuid));
+    }
+
+    fn handle_lookup(t: Transaction, listener: &Channel<Transaction>, center: &Center) {
+        let node = Node::new(center.public.clone(), Some(center.link.clone()));
+        let message = Message::new(
+            Class::Details,
+            center.public.clone(),
+            t.source(),
+            Address::default(),
+            node.as_bytes(),
+        );
+        let transaction = Transaction::new(message);
+        let _ = listener.send(transaction);
+    }
+
+    fn handle_details(t: Transaction, channel: &Channel<SignalingAction>, table: &Safe) {
+        if let Ok(node) = Node::from_bytes(t.message.body.as_bytes()) {
+            table.add(node);
+            let action = SignalingAction::pong(t.source(), t.uuid);
+            let _ = channel.send(action);
+        } else {
+            log::warn!("received invalid node details: {:?}", t);
+        }
+    }
+
+    fn handle_action(t: Transaction, topics: &RefCell<TopicBucket>) {
+        if let Some(simple) = topics.borrow().find(&t.source()) {
+            let command = Command::Message(t);
+            let _ = simple.channel.send(command);
+        }
+    }
+
+    fn handle_subscriber(t: Transaction, topics: &RefCell<TopicBucket>) {
+        if let Some(simple) = topics.borrow().find(&t.topic()) {
+            let addrs = Address::from_bulk(t.message.body.as_bytes());
+            for sub in addrs {
+                let action = Command::Subscriber(sub);
+                let _ = simple.channel.send(action);
+            }
+        }
+    }
+
+    fn handle_unsubscriber(t: Transaction, topics: &RefCell<TopicBucket>) {
+        if let Some(simple) = topics.borrow().find(&t.topic()) {
+            let action = Command::Subscriber(t.source());
+            let _ = simple.channel.send(action);
+        }
+    }
+
+    fn handle_subscribe(t: Transaction, listener: &Channel<Transaction>, records: &RecordBucket) {
+        let topic = t.topic();
+        match records.get(&topic) {
+            Some(record) => {
+                records.subscribe(&topic, t.source());
+                let mut subscribers = Vec::new();
+                record
+                    .subscribers
+                    .iter()
+                    .for_each(|x| subscribers.append(&mut x.as_bytes().to_vec()));
+                subscribers.append(&mut t.source().as_bytes().to_vec());
+                let message = Message::new(
+                    Class::Subscriber,
+                    t.source(),
+                    t.source(),
+                    topic.clone(),
+                    subscribers.clone(),
+                );
+                let transaction = Transaction::new(message);
+                let _ = listener.send(transaction);
+                for addr in record.subscribers {
+                    let message = Message::new(
+                        Class::Subscriber,
+                        t.source(),
+                        addr,
+                        topic.clone(),
+                        subscribers.clone(),
+                    );
+                    let transaction = Transaction::new(message);
+                    let _ = listener.send(transaction);
+                }
+            }
+            None => {
+                let record = Record::new(topic);
+                records.add(record);
+            }
+        }
+    }
+
+    fn handle_unsubscribe(t: Transaction, listener: &Channel<Transaction>, records: &RecordBucket) {
+        let topic = t.topic();
+        match records.get(&topic) {
+            Some(record) => {
+                records.unsubscribe(&topic, &t.source());
+
+                for sub in record.subscribers {
+                    let message = Message::new(
+                        Class::Subscriber,
+                        t.source(),
+                        sub,
+                        topic.clone(),
+                        Vec::new(),
+                    );
+                    let transaction = Transaction::new(message);
+                    let _ = listener.send(transaction);
+                }
+            }
+            None => {}
+        }
     }
 }

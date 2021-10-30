@@ -222,7 +222,7 @@ impl Table {
         let mut data = Vec::new();
         let nodes = self.get(&self.center.public, self.len());
         for n in nodes {
-            data.append(&mut n.address.as_bytes().to_vec());
+            data.append(&mut n.as_bytes().to_vec());
         }
         return data;
     }

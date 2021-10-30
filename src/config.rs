@@ -90,6 +90,11 @@ struct LoadCenter {
     hostname: String,
 }
 
+pub struct Signaling {
+    server: String,
+    port: usize,
+}
+
 /// The local node is configured separately, since some of the values
 /// will have to be set manually or optained through an external
 /// method. Like with the SystemConfig all fields are public and will
@@ -108,6 +113,17 @@ pub struct CenterConfig {
     /// Where possible this is used as a user facing alternative to
     /// the routing key.
     pub hostname: String,
+}
+
+impl Signaling {
+    pub fn new(server: String, port: usize) -> Self {
+        Self { server, port }
+    }
+
+    pub fn to_string(&self) -> String {
+        let elements = [self.server.clone(), self.port.to_string()];
+        elements.join(":")
+    }
 }
 
 impl Config {

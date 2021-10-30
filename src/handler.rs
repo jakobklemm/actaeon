@@ -4,6 +4,7 @@
 //! should get modularized in the future, currently almost everything
 //! is hard coded.)
 
+use crate::config::Signaling;
 use crate::error::Error;
 use crate::node::Address;
 use crate::node::{Center, Node};
@@ -15,7 +16,6 @@ use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use uuid::Uuid;
 
 /// Represents the TCP listener and exposes certain functions to
 /// interact with the outside world. They are mostly just wrappers
@@ -27,6 +27,7 @@ pub struct Listener {
     limit: usize,
     table: Safe,
     cache: Cache,
+    signaling: Signaling,
 }
 
 struct Connection {
@@ -44,6 +45,7 @@ struct Handler {
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     Message(Wire),
+    Bootstrap(Vec<u8>),
     Shutdown,
 }
 
@@ -107,6 +109,7 @@ impl Listener {
         channel: Channel<Transaction>,
         limit: usize,
         table: Safe,
+        signaling: Signaling,
     ) -> Result<Self, Error> {
         let listener = TcpListener::bind(center.link.to_string())?;
         listener.set_nonblocking(true)?;
@@ -116,14 +119,15 @@ impl Listener {
             cache: Cache::new(100),
             connections: RefCell::new(ConnectionBucket::new()),
             channel,
-            // TODO: Temp for testing, replace with Channel to -->?
             limit,
             table,
+            signaling,
         };
         Ok(listener)
     }
 
     pub fn start(self) {
+        // bootstrapping
         thread::spawn(move || loop {
             // 1. Read from Channel (non-blocking)
             if let Some(t) = self.channel.try_recv() {
@@ -153,10 +157,15 @@ impl Listener {
                                 if self.table.should_be_local(&t.target()) {
                                     let _ = self.channel.send(t);
                                 } else {
-                                    // Forward
+                                    let _ = Listener::distribute(
+                                        t,
+                                        &self.table,
+                                        &mut self.connections.borrow_mut(),
+                                        &self.cache,
+                                        self.limit,
+                                    );
                                 }
                             }
-                            // TODO: Integrate RT
                             // Check if still space available.
                             if self.connections.borrow().len() >= self.limit {
                                 // No space => drop conn.
@@ -191,10 +200,29 @@ impl Listener {
                             let addr = conn.address();
                             self.connections.borrow_mut().remove(&addr);
                         }
+                        Action::Bootstrap(_) => {
+                            let table = self.table.export();
+                            let _ = conn.channel.send(Action::Bootstrap(table));
+                        }
                     }
                 }
             }
         });
+    }
+
+    fn bootstrap(signaling: &Signaling, table: Safe) -> Result<TcpStream, Error> {
+        let mut stream = TcpStream::connect(signaling.to_string())?;
+        stream.write(&[0; 142])?;
+        let mut length = [0; 2];
+        let _ = stream.read(&mut length);
+        let length = util::integer(length);
+        let mut bytes = vec![0; length];
+        stream.read(&mut bytes)?;
+        let nodes = Node::from_bulk(bytes);
+        for node in nodes {
+            table.add(node);
+        }
+        Ok(stream)
     }
 
     fn distribute(
@@ -276,11 +304,10 @@ impl Listener {
         Ok((wire, node))
     }
 
-    fn handle_header(socket: &mut TcpStream) -> Result<[u8; 110], Error> {
-        let mut header: [u8; 110] = [0; 110];
+    fn handle_header(socket: &mut TcpStream) -> Result<[u8; 142], Error> {
+        let mut header: [u8; 142] = [0; 142];
         if let Ok(length) = socket.read(&mut header) {
-            if length < 110 {
-                // TODO: Handle bootstrap or center lookup requests.
+            if length < 142 {
                 return Err(Error::Invalid(String::from("received invalid data!")));
             }
             Ok(header)
@@ -319,9 +346,13 @@ impl Handler {
             loop {
                 // Incoming TCP
                 if let Ok(wire) = Handler::message(&mut self.socket) {
-                    if !self.cache.exists(&wire.uuid) {
-                        self.cache.add(&wire.uuid);
-                        let _ = self.channel.send(Action::Message(wire));
+                    if wire.is_empty() {
+                        let _ = self.channel.send(Action::Bootstrap(Vec::new()));
+                    } else {
+                        if !self.cache.exists(&wire.uuid) {
+                            self.cache.add(&wire.uuid);
+                            let _ = self.channel.send(Action::Message(wire));
+                        }
                     }
                 }
 
@@ -342,6 +373,9 @@ impl Handler {
                         Action::Shutdown => {
                             break;
                         }
+                        Action::Bootstrap(bytes) => {
+                            let _ = self.socket.write(&bytes);
+                        }
                     }
                 }
             }
@@ -349,15 +383,17 @@ impl Handler {
     }
 
     fn message(socket: &mut TcpStream) -> Result<Wire, Error> {
-        let mut header = [0; 110];
+        let mut header = [0; 142];
         let header_length = socket.read(&mut header)?;
-        if header_length != 110 {
+        if header_length != 142 {
             return Err(Error::Invalid(String::from(
                 "Received invalid header data!",
             )));
         }
-        if header == [0; 110] {
-            // TODO: bootstrapping!!
+        if header == [0; 142] {
+            // if the wire is empty it means a bootstrapping request,
+            // but the wire still gets processed up the chain until
+            // the listener.
         }
         let length = util::get_length(&header);
         let mut body: Vec<u8> = vec![0; length];
@@ -466,25 +502,4 @@ impl Cache {
             None => None,
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sodiumoxide::crypto::box_;
-
-    #[test]
-    fn test_create_handler() {
-        let (_, s) = box_::gen_keypair();
-        let center = Center::new(s, String::from("127.0.0.1"), 42434);
-        let (c1, _) = Channel::new();
-        let table = Safe::new(42, center.clone());
-        let h = Listener::new(center, c1, 42, table).unwrap();
-        assert_eq!(
-            h.listener.local_addr().unwrap().ip().to_string(),
-            String::from("127.0.0.1")
-        );
-    }
-
-    // Most testing done in tests/
 }

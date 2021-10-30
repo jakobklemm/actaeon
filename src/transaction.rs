@@ -42,11 +42,12 @@ pub struct Transaction {
 /// 04 bytes: Class,
 /// 32 bytes: Source,
 /// 32 bytes: Target,
+/// 32 bytes: Topic,
 /// 16 bytes: UUID,
 /// 24 bytes: Nonce,
 /// .. bytes: Body,
 ///
-/// Minimum data size: 110 bytes (+ body).
+/// Minimum data size: 142 bytes (+ body).
 #[derive(Debug, PartialEq, Clone)]
 pub struct Wire {
     length: [u8; 2],
@@ -54,6 +55,7 @@ pub struct Wire {
     class: [u8; 4],
     source: [u8; 32],
     target: [u8; 32],
+    topic: [u8; 32],
     nonce: [u8; 24],
     body: Vec<u8>,
 }
@@ -126,6 +128,7 @@ impl Transaction {
             class: self.message.class.as_bytes(),
             source: self.message.source.as_bytes(),
             target: self.message.target.as_bytes(),
+            topic: self.message.topic.as_bytes(),
             nonce: self.message.seed.as_bytes(),
             body: self.message.body.clone().as_bytes(),
         }
@@ -159,6 +162,12 @@ impl Transaction {
     /// ensures privacy.
     pub fn source(&self) -> Address {
         self.message.source.clone()
+    }
+
+    /// Returns the Address of topic of a message. This is simply a
+    /// shorthand function for reading the correct field.
+    pub fn topic(&self) -> Address {
+        self.message.topic.clone()
     }
 
     /// Returns the Class of the Message / Transaction.
@@ -274,6 +283,7 @@ impl Wire {
         let mut class: [u8; 4] = [0; 4];
         let mut source: [u8; 32] = [0; 32];
         let mut target: [u8; 32] = [0; 32];
+        let mut topic: [u8; 32] = [0; 32];
         let mut uuid: [u8; 16] = [0; 16];
         let mut nonce: [u8; 24] = [0; 24];
         let mut body: Vec<u8> = Vec::new();
@@ -295,13 +305,17 @@ impl Wire {
             else if i >= 38 && i <= 69 {
                 target[i - 38] = *j;
             }
-            // bytes 70..85 = UUID, len = 16, offset = 70
-            else if i >= 70 && i <= 85 {
-                uuid[i - 70] = *j;
+            // bytes 70..101 = Topic, len = 32, offset = 70
+            else if i >= 70 && i <= 101 {
+                topic[i - 70] = *j;
             }
-            // bytes 86..109 = Nonce, len = 24, offset = 86
-            else if i >= 86 && i <= 109 {
-                nonce[i - 86] = *j;
+            // bytes 102..117 = UUID, len = 16, offset = 102
+            else if i >= 102 && i <= 117 {
+                uuid[i - 102] = *j;
+            }
+            // bytes 118..142 = Nonce, len = 24, offset = 118
+            else if i >= 118 && i <= 141 {
+                nonce[i - 118] = *j;
             } else {
                 body.push(*j);
             }
@@ -312,6 +326,7 @@ impl Wire {
             class,
             source,
             target,
+            topic,
             uuid,
             nonce,
             body,
@@ -332,6 +347,7 @@ impl Wire {
         data.append(&mut self.class.to_vec());
         data.append(&mut self.source.to_vec());
         data.append(&mut self.target.to_vec());
+        data.append(&mut self.topic.to_vec());
         data.append(&mut self.uuid.to_vec());
         data.append(&mut self.nonce.to_vec());
         data.append(&mut self.body.clone());
@@ -345,14 +361,20 @@ impl Wire {
         let class = Class::from_bytes(self.class)?;
         let source = Address::from_bytes(self.source)?;
         let target = Address::from_bytes(self.target)?;
+        let topic = Address::from_bytes(self.topic)?;
         let seed = Seed::from_bytes(&self.nonce)?;
         let uuid = Uuid::from_bytes(self.uuid);
-        let message = Message::create(class, source, target, seed, self.body);
+        let message = Message::create(class, source, target, topic, seed, self.body);
         Ok(Transaction {
             uuid,
             created: SystemTime::now(),
             message,
         })
+    }
+
+    /// Checks if every field of the wire is zero.
+    pub fn is_empty(&self) -> bool {
+        self.as_bytes() == [0; 142]
     }
 }
 
@@ -416,6 +438,7 @@ mod tests {
             Class::Ping,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
+            Address::generate("tpc").unwrap(),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -428,6 +451,7 @@ mod tests {
             Class::Action,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
+            Address::generate("tpc").unwrap(),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -444,6 +468,7 @@ mod tests {
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
+            Address::generate("tpc").unwrap(),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -473,12 +498,21 @@ mod tests {
             Class::Ping,
             Address::generate("abc").unwrap(),
             Address::generate("def").unwrap(),
+            Address::generate("tpc").unwrap(),
             seed,
             "test".to_string().as_bytes().to_vec(),
         );
         let t = Transaction::build(uuid, time, message);
         let d = Transaction::from_bytes(&generate_test_data()).unwrap();
         assert_eq!(t.message, d.message);
+    }
+
+    #[test]
+    fn test_empty_wire() {
+        let bytes = [0; 142];
+        let wire = Wire::from_bytes(&bytes);
+        assert_eq!(wire.is_err(), false);
+        assert_eq!(wire.unwrap().is_empty(), true);
     }
 
     fn generate_test_data() -> Vec<u8> {
@@ -494,6 +528,12 @@ mod tests {
             .to_vec();
         data.append(&mut source.clone());
         let target = Address::generate("def")
+            .unwrap()
+            .as_bytes()
+            .to_owned()
+            .to_vec();
+        data.append(&mut target.clone());
+        let target = Address::generate("tpc")
             .unwrap()
             .as_bytes()
             .to_owned()

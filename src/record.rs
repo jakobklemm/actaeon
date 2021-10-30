@@ -20,11 +20,11 @@ pub struct Record {
     /// no system of republishing them or invalidating them later
     /// since this implementation is (right now at least) only
     /// suitable for small clusters.
-    address: Address,
+    pub address: Address,
     /// List of subscribers as a Vec of Addresses. The actual Link
     /// data will be fetched from the RT or messages will be
     /// distributed indirectly.
-    subscribers: Vec<Address>,
+    pub subscribers: Vec<Address>,
 }
 
 /// Multi "threadable" collection of all locally registered Records.

@@ -24,6 +24,9 @@ pub struct Message {
     pub source: Address,
     /// Receiver of the message, might be a never before seen Address.
     pub target: Address,
+    /// Each message corresponds to a topic or has 32 bytes of zero if
+    /// its independant.
+    pub topic: Address,
     /// Since each message is encrypted a nonce needs to be sent
     /// along. It will be used to parse the body and should not be
     /// read / used by the user. The poly1305 is represented as a
@@ -50,11 +53,18 @@ pub struct Seed(Nonce);
 impl Message {
     /// Create a new message with a random nonce (meant to be called
     /// for new messages).
-    pub fn new(class: Class, source: Address, target: Address, body: Vec<u8>) -> Self {
+    pub fn new(
+        class: Class,
+        source: Address,
+        target: Address,
+        topic: Address,
+        body: Vec<u8>,
+    ) -> Self {
         Self {
             class,
             source,
             target,
+            topic,
             seed: Seed::new(box_::gen_nonce()),
             body: Body::new(body),
         }
@@ -65,6 +75,7 @@ impl Message {
         class: Class,
         source: Address,
         target: Address,
+        topic: Address,
         seed: Seed,
         body: Vec<u8>,
     ) -> Self {
@@ -72,6 +83,7 @@ impl Message {
             class,
             source,
             target,
+            topic,
             seed,
             body: Body::new(body),
         }
@@ -197,6 +209,7 @@ mod tests {
             Class::Ping,
             Address::generate("a").unwrap(),
             Address::generate("b").unwrap(),
+            Address::random(),
             Vec::new(),
         );
         let center = Center::new(box_::gen_keypair().1, String::from(""), 0);
@@ -211,6 +224,7 @@ mod tests {
             Class::Ping,
             Address::new(theirpk),
             Address::new(ourpk),
+            Address::random(),
             [111, 42].to_vec(),
         );
         let theircenter = Center::new(theirsk, String::from(""), 0);

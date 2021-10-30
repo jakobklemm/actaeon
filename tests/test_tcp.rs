@@ -1,3 +1,4 @@
+use actaeon::config::Signaling;
 use actaeon::handler::Listener;
 use actaeon::message::Message;
 use actaeon::node::{Address, Center, Node};
@@ -15,12 +16,14 @@ fn test_tcp_init() {
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 42424);
     let table = Safe::new(42, center.clone());
-    let listener = Listener::new(center, w1, 10, table).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let listener = Listener::new(center, w1, 10, table, signaling).unwrap();
     let _ = listener.start();
 
     // message
     let message = Message::new(
         Class::Action,
+        Address::random(),
         Address::random(),
         Address::random(),
         String::from("test body").as_bytes().to_vec(),
@@ -51,12 +54,14 @@ fn test_tcp_message() {
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 42425);
     let table = Safe::new(42, center.clone());
-    let listener = Listener::new(center, w1, 10, table).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let listener = Listener::new(center, w1, 10, table, signaling).unwrap();
     let _ = listener.start();
 
     // message
     let message = Message::new(
         Class::Action,
+        Address::random(),
         Address::random(),
         Address::random(),
         String::from("test body").as_bytes().to_vec(),
@@ -85,6 +90,7 @@ fn test_tcp_message() {
         Class::Action,
         Address::random(),
         Address::random(),
+        Address::random(),
         "message".to_string().as_bytes().to_vec(),
     );
     let t = Transaction::new(message);
@@ -100,12 +106,14 @@ fn test_tcp_cache() {
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 42431);
     let table = Safe::new(42, center.clone());
-    let listener = Listener::new(center, w1, 10, table).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let listener = Listener::new(center, w1, 10, table, signaling).unwrap();
     let _ = listener.start();
 
     // message
     let message = Message::new(
         Class::Action,
+        Address::random(),
         Address::random(),
         Address::random(),
         String::from("test body").as_bytes().to_vec(),
@@ -131,6 +139,7 @@ fn test_tcp_cache() {
         Class::Action,
         Address::random(),
         Address::random(),
+        Address::random(),
         "message".to_string().as_bytes().to_vec(),
     );
     let t = Transaction::new(message);
@@ -148,12 +157,14 @@ fn test_tcp_random() {
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 42426);
     let table = Safe::new(42, center.clone());
-    let listener = Listener::new(center, w1, 10, table).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let listener = Listener::new(center, w1, 10, table, signaling).unwrap();
     let _ = listener.start();
 
     // message
     let message = Message::new(
         Class::Action,
+        Address::random(),
         Address::random(),
         Address::random(),
         String::from("test body").as_bytes().to_vec(),
@@ -180,6 +191,7 @@ fn test_tcp_random() {
             Class::Action,
             Address::random(),
             Address::random(),
+            Address::random(),
             i.to_string().as_bytes().to_vec(),
         );
         let t = Transaction::new(message);
@@ -197,7 +209,8 @@ fn test_tcp_outgoing() {
     let lcenter = Center::new(secret, String::from("127.0.0.1"), 42427);
     let lnode = Node::new(lcenter.public.clone(), Some(lcenter.link.clone()));
     let ltable = Safe::new(42, lcenter.clone());
-    let llistener = Listener::new(lcenter.clone(), w1, 10, ltable).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let llistener = Listener::new(lcenter.clone(), w1, 10, ltable, signaling).unwrap();
     let _ = llistener.start();
 
     // remote
@@ -206,7 +219,8 @@ fn test_tcp_outgoing() {
     let rcenter = Center::new(secret, String::from("127.0.0.1"), 42428);
     let rtable = Safe::new(42, rcenter.clone());
     rtable.add(lnode);
-    let rlistener = Listener::new(rcenter.clone(), r1, 10, rtable).unwrap();
+    let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
+    let rlistener = Listener::new(rcenter.clone(), r1, 10, rtable, signaling).unwrap();
     let _ = rlistener.start();
 
     // message
@@ -214,6 +228,7 @@ fn test_tcp_outgoing() {
         Class::Action,
         rcenter.public.clone(),
         lcenter.public.clone(),
+        Address::random(),
         String::from("test body").as_bytes().to_vec(),
     );
     let t = Transaction::new(message);
