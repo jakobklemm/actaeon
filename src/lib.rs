@@ -2,7 +2,6 @@ pub mod bucket;
 pub mod config;
 pub mod error;
 pub mod handler;
-pub mod interface;
 pub mod message;
 pub mod node;
 pub mod record;
@@ -50,9 +49,9 @@ impl Interface {
     /// might have to be wrapped by a start function.
     pub fn new(config: Config, center: Center) -> Result<Self, Error> {
         let bucket = RecordBucket::new();
-        let (switch1, switch2) = Channel::new();
-        let (listener1, listener2) = Channel::new();
-        let (signaling1, signaling2) = Channel::new();
+        let (switch1, switch2) = Channel::<InterfaceAction>::new();
+        let (listener1, listener2) = Channel::<Transaction>::new();
+        let (signaling1, signaling2) = Channel::<signaling::SignalingAction>::new();
         let table = Safe::new(config.replication, center.clone());
         let signaling = CSig::new(config.signaling, config.port);
         let listener = Listener::new(

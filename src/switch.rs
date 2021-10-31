@@ -57,7 +57,7 @@ impl Switch {
         signaling: Channel<SignalingAction>,
         center: Center,
         table: Safe,
-	records: RecordBucket,
+        records: RecordBucket,
     ) -> Result<Self, Error> {
         let switch = Switch {
             listener,
@@ -83,6 +83,7 @@ impl Switch {
             loop {
                 // 1. Listen on Interface Channel.
                 if let Some(action) = self.interface.try_recv() {
+                    println!("received data on switch!");
                     match action {
                         InterfaceAction::Shutdown => {
                             log::info!("received shutdown command, terminating Switch.");
@@ -176,8 +177,10 @@ impl Switch {
 
                 // 4. Listen on Handler Channel.
                 if let Some(t) = self.listener.try_recv() {
+                    println!("switch incoming handler data: {:?}", t);
                     let target = t.target();
                     if target == self.center.public {
+                        println!("data received in switch!");
                         // Handle: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber
                         // Error: Subscriber, Unsubscribe
                         match t.class() {
@@ -194,7 +197,7 @@ impl Switch {
                                 Switch::handle_details(t, &self.signaling, &self.table);
                             }
                             Class::Action => {
-                                Switch::handle_action(t, &self.topics);
+                                Switch::handle_action(t, &self.topics, &self.interface);
                             }
                             Class::Subscriber => {
                                 Switch::handle_subscriber(t, &self.topics);
@@ -266,10 +269,18 @@ impl Switch {
         }
     }
 
-    fn handle_action(t: Transaction, topics: &RefCell<TopicBucket>) {
+    fn handle_action(
+        t: Transaction,
+        topics: &RefCell<TopicBucket>,
+        interface: &Channel<InterfaceAction>,
+    ) {
+        println!("received action data: {:?}", t);
         if let Some(simple) = topics.borrow().find(&t.source()) {
             let command = Command::Message(t);
             let _ = simple.channel.send(command);
+        } else {
+            let action = InterfaceAction::Message(t);
+            let _ = interface.send(action);
         }
     }
 

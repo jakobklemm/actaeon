@@ -3,7 +3,6 @@
 //! Responsible for Kademlia background tasks and bootstrapping the
 //! Instance.
 
-use crate::config::Config;
 use crate::message::Message;
 use crate::node::Address;
 use crate::router::Safe;

@@ -6,7 +6,7 @@
 
 use crate::config::Signaling;
 use crate::error::Error;
-use crate::node::{Address, Center, Link, Node};
+use crate::node::{Address, Center, Node};
 use crate::router::Safe;
 use crate::transaction::{Transaction, Wire};
 use crate::util::{self, Channel};
@@ -132,8 +132,11 @@ impl Listener {
             // TODO: Error handler
             let _ = Listener::run_bootstrap(&self.signaling, &self.table, &self.center);
             loop {
+                //println!("listener data loop!");
+                //println!("data length: {:?}", self.connections.borrow().len());
                 // 1. Read from Channel (non-blocking)
                 if let Some(t) = self.channel.try_recv() {
+                    println!("handler data: {:?}", t);
                     let e = Listener::distribute(
                         t,
                         &self.table,
@@ -152,44 +155,44 @@ impl Listener {
                         log::info!("new incoming TCP connection!");
                         if let Ok(header) = Listener::handle_header(&mut socket) {
                             if header == [0; 142] {
-                                let _ = Listener::handle_bootstrap(
-                                    &mut socket,
-                                    &self.table,
-                                    &self.center,
-                                );
-                                continue;
-                            }
-                            match Listener::handle_establish(header, &mut socket) {
-                                Ok((wire, node)) => {
-                                    let address = node.address.clone();
-                                    // TODO: Handle error (unlikely but possible)
-                                    if !self.cache.exists(&wire.uuid) {
-                                        self.cache.add(&wire.uuid);
-                                        let t = Transaction::from_wire(&wire).unwrap();
-                                        if self.table.should_be_local(&t.target()) {
-                                            let _ = self.channel.send(t);
-                                        } else {
-                                            let _ = Listener::distribute(
-                                                t,
-                                                &self.table,
-                                                &mut self.connections.borrow_mut(),
-                                                &self.cache,
-                                                self.limit,
+                                let _ = Listener::handle_bootstrap(&mut socket, &self.table);
+                            } else {
+                                match Listener::handle_establish(header, &mut socket) {
+                                    Ok((wire, node)) => {
+                                        let address = node.address.clone();
+                                        // TODO: Handle error (unlikely but possible)
+                                        if !self.cache.exists(&wire.uuid) {
+                                            self.cache.add(&wire.uuid);
+                                            let t = Transaction::from_wire(&wire).unwrap();
+                                            if self.table.should_be_local(&t.target()) {
+                                                let _ = self.channel.send(t);
+                                            } else {
+                                                let _ = Listener::distribute(
+                                                    t,
+                                                    &self.table,
+                                                    &mut self.connections.borrow_mut(),
+                                                    &self.cache,
+                                                    self.limit,
+                                                );
+                                            }
+
+                                            // Check if still space available.
+                                            if self.connections.borrow().len() >= self.limit {
+                                                // No space => drop conn.
+                                                continue;
+                                            }
+                                            let (connection, handler) = Connection::new(
+                                                address,
+                                                socket,
+                                                self.cache.clone(),
                                             );
+                                            self.connections.borrow_mut().add(connection);
+                                            Handler::spawn(handler);
                                         }
                                     }
-                                    // Check if still space available.
-                                    if self.connections.borrow().len() >= self.limit {
-                                        // No space => drop conn.
-                                        continue;
+                                    Err(e) => {
+                                        log::warn!("received invalid TCP data: {}", e);
                                     }
-                                    let (connection, handler) =
-                                        Connection::new(address, socket, self.cache.clone());
-                                    self.connections.borrow_mut().add(connection);
-                                    Handler::spawn(handler);
-                                }
-                                Err(e) => {
-                                    log::warn!("received invalid TCP data: {}", e);
                                 }
                             }
                         }
@@ -232,10 +235,7 @@ impl Listener {
     }
 
     fn run_bootstrap(signaling: &Signaling, table: &Safe, center: &Center) -> Result<(), Error> {
-        println!("data: running bootstrapp!");
-        println!("data: {}", signaling.to_string());
         let mut stream = TcpStream::connect(signaling.to_string())?;
-        println!("data: connected!");
         stream.write(&[0; 142])?;
         let mut length = [0; 2];
         let _ = stream.read(&mut length);
@@ -245,10 +245,6 @@ impl Listener {
         // send this center
         let node = Node::new(center.public.clone(), Some(center.link.clone())).as_bytes();
         stream.write(&node)?;
-        // read other center
-        let remote = Listener::handle_node(&mut stream)?;
-        table.add(remote);
-        println!("data: {:?}", bytes);
         let nodes = Node::from_bulk(bytes);
         for node in nodes {
             table.add(node);
@@ -256,19 +252,13 @@ impl Listener {
         Ok(())
     }
 
-    fn handle_bootstrap(
-        stream: &mut TcpStream,
-        table: &Safe,
-        center: &Center,
-    ) -> Result<(), Error> {
+    fn handle_bootstrap(stream: &mut TcpStream, table: &Safe) -> Result<(), Error> {
         let nodes = table.export();
         let length = util::length(&nodes);
         stream.write(&length)?;
         stream.write(&nodes)?;
         let node = Listener::handle_node(stream)?;
         table.add(node);
-        let center = Node::new(center.public.clone(), Some(center.link.clone())).as_bytes();
-        stream.write(&center)?;
         Ok(())
     }
 
@@ -279,17 +269,21 @@ impl Listener {
         cache: &Cache,
         limit: usize,
     ) -> Result<(), Error> {
+        println!("todo: data: {:?}", t);
         let targets = table.get_copy(&t.target(), limit);
         if targets.len() == 0 {
             return Err(Error::System(String::from("no target nodes found.")));
         }
+        println!("data targets: {:?}", targets);
         for node in targets {
             let target = node.address.clone();
             match connections.get(&target) {
                 Some(conn) => {
+                    println!("data send to connection channel");
                     let _ = conn.channel.send(Action::Message(t.to_wire()));
                 }
                 None => {
+                    let _ = Listener::handle_single(t.clone(), node.clone());
                     if connections.len() >= limit {
                         // TODO: Handle error
                         let _ = Listener::handle_single(t.clone(), node);
@@ -375,7 +369,7 @@ impl Listener {
         let _ = socket.read(&mut header);
         let length = [header[0], header[1]];
         let length = util::integer(length);
-        let mut link: Vec<u8> = vec![0; length.into()];
+        let mut link: Vec<u8> = vec![0; length];
         let _ = socket.read_exact(&mut link);
         let mut node_bytes = Vec::new();
         node_bytes.append(&mut header.to_vec());
@@ -392,13 +386,9 @@ impl Handler {
             loop {
                 // Incoming TCP
                 if let Ok(wire) = Handler::message(&mut self.socket) {
-                    if wire.is_empty() {
-                        let _ = self.channel.send(Action::Bootstrap(Vec::new()));
-                    } else {
-                        if !self.cache.exists(&wire.uuid) {
-                            self.cache.add(&wire.uuid);
-                            let _ = self.channel.send(Action::Message(wire));
-                        }
+                    if !self.cache.exists(&wire.uuid) {
+                        self.cache.add(&wire.uuid);
+                        let _ = self.channel.send(Action::Message(wire));
                     }
                 }
 
@@ -518,12 +508,6 @@ impl Cache {
         let mut cache = self.elements.lock().unwrap();
         (*cache).push(uuid.clone());
         (*cache).truncate(self.limit);
-    }
-
-    /// Clears the cache.
-    fn empty(&self) {
-        let mut cache = self.elements.lock().unwrap();
-        *cache = Vec::new();
     }
 
     /// Checks if a transaction is already in the cache.

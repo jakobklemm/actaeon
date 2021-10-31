@@ -224,6 +224,8 @@ impl Table {
         for n in nodes {
             data.append(&mut n.as_bytes().to_vec());
         }
+        let center = Node::new(self.center.public.clone(), Some(self.center.link.clone()));
+        data.append(&mut center.as_bytes());
         return data;
     }
 
