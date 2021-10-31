@@ -13,7 +13,7 @@ use std::net::TcpStream;
 #[test]
 fn test_manual_bootstrap() {
     // local
-    let (w1, w2) = Channel::new();
+    let (w1, _) = Channel::new();
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 42435);
     let table = Safe::new(42, center.clone());

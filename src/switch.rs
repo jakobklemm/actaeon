@@ -7,20 +7,19 @@
 //! the cache, each protocol then has its own module.
 
 use crate::error::Error;
-use crate::handler::Listener;
-use crate::interface::InterfaceAction;
 use crate::message::Message;
-use crate::node::{Address, Center, Link, Node};
+use crate::node::{Address, Center, Node};
 use crate::record::{Record, RecordBucket};
 use crate::router::Safe;
-use crate::router::Table;
-use crate::signaling::SignalingAction;
-use crate::topic::{Command, Topic};
-use crate::topic::{Simple, TopicBucket};
-use crate::transaction::{Class, Transaction, Wire};
+use crate::signaling::{SignalingAction, Type};
+use crate::topic::Command;
+use crate::topic::TopicBucket;
+use crate::transaction::{Class, Transaction};
 use crate::util::Channel;
+use crate::InterfaceAction;
 use std::cell::RefCell;
 use std::thread;
+use std::time::SystemTime;
 
 /// Currently the system requires a dedicated thread for the listening
 /// server, which will autoamtically get started. The thread will hold
@@ -29,9 +28,6 @@ pub struct Switch {
     listener: Channel<Transaction>,
     interface: Channel<InterfaceAction>,
     signaling: Channel<SignalingAction>,
-    /// Each Message will be sent out multiple times to ensure
-    /// delivery, currently it is simply hard coded.
-    replication: usize,
     /// The main copy of the couting table, which will be maintained
     /// by this Thread. It will have to be wrapped in a Arc Mutex to
     /// allow for the Updater Thread.
@@ -60,19 +56,17 @@ impl Switch {
         interface: Channel<InterfaceAction>,
         signaling: Channel<SignalingAction>,
         center: Center,
-        replication: usize,
         table: Safe,
-        limit: usize,
+	records: RecordBucket,
     ) -> Result<Self, Error> {
         let switch = Switch {
             listener,
             interface,
             signaling,
-            replication,
             table,
             topics: RefCell::new(TopicBucket::new(center.clone())),
-            records: RecordBucket::new(),
-            center: center,
+            records,
+            center,
         };
         Ok(switch)
     }
@@ -152,6 +146,34 @@ impl Switch {
                 }
 
                 // 3. Listen on Siganling Channel.
+                if let Some(action) = self.signaling.try_recv() {
+                    match action.action {
+                        Type::Ping => {
+                            let message = Message::new(
+                                Class::Ping,
+                                self.center.public.clone(),
+                                action.target,
+                                Address::default(),
+                                Vec::new(),
+                            );
+                            let t = Transaction::build(action.uuid, SystemTime::now(), message);
+                            let _ = self.listener.send(t);
+                        }
+                        Type::Lookup => {
+                            let message = Message::new(
+                                Class::Lookup,
+                                self.center.public.clone(),
+                                action.target,
+                                Address::default(),
+                                Vec::new(),
+                            );
+                            let t = Transaction::build(action.uuid, SystemTime::now(), message);
+                            let _ = self.listener.send(t);
+                        }
+                        _ => {}
+                    }
+                }
+
                 // 4. Listen on Handler Channel.
                 if let Some(t) = self.listener.try_recv() {
                     let target = t.target();

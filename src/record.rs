@@ -28,6 +28,8 @@ pub struct Record {
 }
 
 /// Multi "threadable" collection of all locally registered Records.
+/// TODO: Check if it has to be thread safe.
+#[derive(Clone)]
 pub struct RecordBucket(Arc<Mutex<HashMap<Address, Record>>>);
 
 impl Record {

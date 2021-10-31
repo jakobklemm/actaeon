@@ -23,9 +23,9 @@ pub struct Signaling {
 
 #[derive(Eq, PartialEq, Clone)]
 pub struct SignalingAction {
-    action: Type,
-    target: Address,
-    uuid: Uuid,
+    pub action: Type,
+    pub target: Address,
+    pub uuid: Uuid,
 }
 
 pub struct ActionBucket {
@@ -151,7 +151,7 @@ impl ActionBucket {
     }
 
     pub fn get(&self) -> Option<&SignalingAction> {
-        self.actions.get(0)
+        self.actions.first()
     }
 
     pub fn add(&mut self, action: SignalingAction) {
