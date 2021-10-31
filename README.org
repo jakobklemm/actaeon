@@ -3,43 +3,36 @@
 Distributed PubSub and messaging protocol for decentralized real time
 applications.
 
-* Goals
-- To provide a simple, easy to use library for general purpose
-  decentralized networking.
-- Enable custom components and functions through a modular design.
-  
-* Architecture
-- The user needs to define the config (load from file) and the center
-  (local kademlia values).
-- Start the application, internally a dedicated listening thread is started.
-- In the game loop or other application logic blocking or nonblocking
-  calls can be made to fetch messages from the system, as well as send
-  them.
-- The system should automatically take care of routing, verification
-  and signaling without requiring any manuall management, without
-  denying the user the ability to change relevant settings.
-* Concurrency
-Currently the threading model is all hard coded, in the future a more
-modular system has to be implemented.
-- Acceptor Thread: Listens for new incoming TCP connections. It runs
-  in an continuous loop, only being active when a new connection
-  arrives, at which point it creates a connection object and passes it
-  on the system. No actual messages are processed on this thread.
-- Handler Thread: On the handler thread Connections can get
-  periodically processed when needed. 
-* Terminology
-| Term                     | Explanation                                                |
-|--------------------------+------------------------------------------------------------|
-| Adapter                  | External interface                                         |
-| Passive Message          | Message not for this node, handled by the Kademlia system. |
-| Active Message           | Message for this and and for the user.                     |
-| Automatic Message        | Message for this node but handled internally.              |
-| Handler thread / process | Dedicated thread for receiving messages.                   |
-| Center                   | Self / this, local node.                                   |
-| Provider                 | Location of the PubSub entry                               |
-|                          |                                                            |
-* Issues
-List of known urgent issues.
-- Signaling: The server currently has to be available. -> Replace with
-  Array & make variable to only copy the closest.
+This library offers users a simple to use, easy to understand API for
+a mostly automatically managed decentralized messaging system based on
+the Kademlia paper. Fast and reliable message exchange is possible
+through both direct and indirect TCP messaging.
 
+A very simple example of how to use the library to broadcast messages
+on a specific topic:
+#+begin_src rust
+  use actaeon::{
+      config::Config,
+      node::{Center, ToAddress},
+      Interface,
+  };
+  use sodiumoxide::crypto::box_;
+  
+  fn main() {
+      let config = Config::new(20, 1, 100, "example.com".to_string(), 4242);
+      let (_, secret) = box_::gen_keypair();
+      let center = Center::new(secret, String::from("127.0.0.1"), 1234);
+  
+      let interface = Interface::new(config, center).unwrap();
+  
+      let mut topic = interface.subscribe(&"example".to_string().to_address().unwrap());
+  
+      let _ = topic.broadcast("hello world".as_bytes().to_vec());
+  }
+#+end_src
+
+There are still some unresolved issues:
+- Active connections can sometimes fail without reason.
+- Error handling for signaling & multiple signaling servers.
+- General documentation (and minor error handling).
+- Add more detailed logging & tracing.

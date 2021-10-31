@@ -83,7 +83,6 @@ impl Switch {
             loop {
                 // 1. Listen on Interface Channel.
                 if let Some(action) = self.interface.try_recv() {
-                    println!("received data on switch!");
                     match action {
                         InterfaceAction::Shutdown => {
                             log::info!("received shutdown command, terminating Switch.");
@@ -95,18 +94,37 @@ impl Switch {
                         InterfaceAction::Subscribe(simple) => {
                             let target = simple.address.clone();
                             self.topics.borrow_mut().add(simple);
-                            let message = Message::new(
-                                Class::Subscribe,
-                                self.center.public.clone(),
-                                target.clone(),
-                                // the subscribe action corresponds to
-                                // no topic, but for simplicity the
-                                // target is used twice.
-                                target,
-                                Vec::new(),
-                            );
-                            let t = Transaction::new(message);
-                            let _ = self.listener.send(t);
+                            if self.table.should_be_local(&target) {
+                                let message = Message::new(
+                                    Class::Subscribe,
+                                    self.center.public.clone(),
+                                    target.clone(),
+                                    target,
+                                    Vec::new(),
+                                );
+                                let t = Transaction::new(message);
+
+                                Switch::handle_subscribe(
+                                    t,
+                                    &self.listener,
+                                    &self.records,
+                                    &self.topics,
+                                    &self.center,
+                                )
+                            } else {
+                                let message = Message::new(
+                                    Class::Subscribe,
+                                    self.center.public.clone(),
+                                    target.clone(),
+                                    // the subscribe action corresponds to
+                                    // no topic, but for simplicity the
+                                    // target is used twice.
+                                    target,
+                                    Vec::new(),
+                                );
+                                let t = Transaction::new(message);
+                                let _ = self.listener.send(t);
+                            }
                         }
                     }
                 }
@@ -132,7 +150,7 @@ impl Switch {
                             }
                             Command::Broadcast(addr, body) => {
                                 let message = Message::new(
-                                    Class::Unsubscribe,
+                                    Class::Action,
                                     self.center.public.clone(),
                                     addr,
                                     topic,
@@ -177,10 +195,8 @@ impl Switch {
 
                 // 4. Listen on Handler Channel.
                 if let Some(t) = self.listener.try_recv() {
-                    println!("switch incoming handler data: {:?}", t);
                     let target = t.target();
                     if target == self.center.public {
-                        println!("data received in switch!");
                         // Handle: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber
                         // Error: Subscriber, Unsubscribe
                         match t.class() {
@@ -200,7 +216,7 @@ impl Switch {
                                 Switch::handle_action(t, &self.topics, &self.interface);
                             }
                             Class::Subscriber => {
-                                Switch::handle_subscriber(t, &self.topics);
+                                Switch::handle_subscriber(t, &self.topics, &self.center);
                             }
                             Class::Unsubscriber => {
                                 Switch::handle_unsubscriber(t, &self.topics);
@@ -214,11 +230,18 @@ impl Switch {
                         // Maybe Handle: Subscribe, Unsubscribe, Lookup
                         match t.class() {
                             Class::Subscribe => {
-                                Switch::handle_subscribe(t, &self.listener, &self.records);
+                                Switch::handle_subscribe(
+                                    t,
+                                    &self.listener,
+                                    &self.records,
+                                    &self.topics,
+                                    &self.center,
+                                );
                             }
                             Class::Unsubscribe => {
                                 Switch::handle_unsubscribe(t, &self.listener, &self.records);
                             }
+                            // TODO: Handle lookup!
                             _ => {
                                 let _ = self.listener.send(t);
                             }
@@ -274,8 +297,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         interface: &Channel<InterfaceAction>,
     ) {
-        println!("received action data: {:?}", t);
-        if let Some(simple) = topics.borrow().find(&t.source()) {
+        if let Some(simple) = topics.borrow().find(&t.topic()) {
             let command = Command::Message(t);
             let _ = simple.channel.send(command);
         } else {
@@ -284,12 +306,14 @@ impl Switch {
         }
     }
 
-    fn handle_subscriber(t: Transaction, topics: &RefCell<TopicBucket>) {
+    fn handle_subscriber(t: Transaction, topics: &RefCell<TopicBucket>, center: &Center) {
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let addrs = Address::from_bulk(t.message.body.as_bytes());
             for sub in addrs {
-                let action = Command::Subscriber(sub);
-                let _ = simple.channel.send(action);
+                if sub != center.public {
+                    let action = Command::Subscriber(sub);
+                    let _ = simple.channel.send(action);
+                }
             }
         }
     }
@@ -301,8 +325,14 @@ impl Switch {
         }
     }
 
-    fn handle_subscribe(t: Transaction, listener: &Channel<Transaction>, records: &RecordBucket) {
-        let topic = t.topic();
+    fn handle_subscribe(
+        t: Transaction,
+        listener: &Channel<Transaction>,
+        records: &RecordBucket,
+        topics: &RefCell<TopicBucket>,
+        center: &Center,
+    ) {
+        let topic = t.target();
         match records.get(&topic) {
             Some(record) => {
                 records.subscribe(&topic, t.source());
@@ -312,15 +342,17 @@ impl Switch {
                     .iter()
                     .for_each(|x| subscribers.append(&mut x.as_bytes().to_vec()));
                 subscribers.append(&mut t.source().as_bytes().to_vec());
-                let message = Message::new(
-                    Class::Subscriber,
-                    t.source(),
-                    t.source(),
-                    topic.clone(),
-                    subscribers.clone(),
-                );
-                let transaction = Transaction::new(message);
-                let _ = listener.send(transaction);
+                if topics.borrow().is_local(&topic) {
+                    let message = Message::new(
+                        Class::Subscriber,
+                        t.topic(),
+                        t.source(),
+                        topic.clone(),
+                        subscribers.clone(),
+                    );
+                    let transaction = Transaction::new(message);
+                    Switch::handle_subscriber(transaction, topics, center)
+                }
                 for addr in record.subscribers {
                     let message = Message::new(
                         Class::Subscriber,
@@ -334,7 +366,8 @@ impl Switch {
                 }
             }
             None => {
-                let record = Record::new(topic);
+                let mut record = Record::new(topic.clone());
+                record.subscribe(t.source());
                 records.add(record);
             }
         }

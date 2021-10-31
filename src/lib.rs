@@ -83,10 +83,10 @@ impl Interface {
         })
     }
 
-    pub fn subscribe(self, addr: Address) -> Topic {
+    pub fn subscribe(self, addr: &Address) -> Topic {
         let (c1, c2) = Channel::new();
         let local = Topic::new(addr.clone(), c1, Vec::new());
-        let remote = Simple::new(addr, c2);
+        let remote = Simple::new(addr.clone(), c2);
         let _ = self.switch.send(InterfaceAction::Subscribe(remote));
         local
     }

@@ -45,7 +45,6 @@ struct Handler {
 #[derive(Clone, Debug, PartialEq)]
 enum Action {
     Message(Wire),
-    Bootstrap(Vec<u8>),
     Shutdown,
 }
 
@@ -132,20 +131,22 @@ impl Listener {
             // TODO: Error handler
             let _ = Listener::run_bootstrap(&self.signaling, &self.table, &self.center);
             loop {
-                //println!("listener data loop!");
-                //println!("data length: {:?}", self.connections.borrow().len());
                 // 1. Read from Channel (non-blocking)
                 if let Some(t) = self.channel.try_recv() {
-                    println!("handler data: {:?}", t);
-                    let e = Listener::distribute(
-                        t,
-                        &self.table,
-                        &mut self.connections.borrow_mut(),
-                        &self.cache,
-                        self.limit,
-                    );
-                    if e.is_err() {
-                        log::error!("unable to distribute message: {}", e.unwrap_err());
+                    if t.target() == self.center.public {
+                        let _ = self.channel.send(t);
+                    } else {
+                        let e = Listener::distribute(
+                            t,
+                            &self.table,
+                            &mut self.connections.borrow_mut(),
+                            &self.cache,
+                            &self.center,
+                            self.limit,
+                        );
+                        if e.is_err() {
+                            log::error!("unable to distribute message: {}", e.unwrap_err());
+                        }
                     }
                 }
 
@@ -172,10 +173,10 @@ impl Listener {
                                                     &self.table,
                                                     &mut self.connections.borrow_mut(),
                                                     &self.cache,
+                                                    &self.center,
                                                     self.limit,
                                                 );
                                             }
-
                                             // Check if still space available.
                                             if self.connections.borrow().len() >= self.limit {
                                                 // No space => drop conn.
@@ -207,25 +208,12 @@ impl Listener {
                     if let Some(action) = conn.try_recv() {
                         match action {
                             Action::Message(wire) => {
-                                // TODO: Handle easy Kademlia cases.
-                                // TODO: Handle error / thread crash.
                                 let t = Transaction::from_wire(&wire).unwrap();
                                 let _ = self.channel.send(t);
                             }
                             Action::Shutdown => {
                                 let addr = conn.address();
                                 self.connections.borrow_mut().remove(&addr);
-                            }
-                            Action::Bootstrap(bytes) => {
-                                if bytes.is_empty() {
-                                    let table = self.table.export();
-                                    let _ = conn.channel.send(Action::Bootstrap(table));
-                                } else {
-                                    let nodes = Node::from_bulk(bytes);
-                                    for node in nodes {
-                                        self.table.add(node);
-                                    }
-                                }
                             }
                         }
                     }
@@ -267,32 +255,34 @@ impl Listener {
         table: &Safe,
         connections: &mut ConnectionBucket,
         cache: &Cache,
+        center: &Center,
         limit: usize,
     ) -> Result<(), Error> {
-        println!("todo: data: {:?}", t);
         let targets = table.get_copy(&t.target(), limit);
         if targets.len() == 0 {
             return Err(Error::System(String::from("no target nodes found.")));
         }
-        println!("data targets: {:?}", targets);
         for node in targets {
             let target = node.address.clone();
             match connections.get(&target) {
                 Some(conn) => {
-                    println!("data send to connection channel");
                     let _ = conn.channel.send(Action::Message(t.to_wire()));
                 }
                 None => {
-                    let _ = Listener::handle_single(t.clone(), node.clone());
                     if connections.len() >= limit {
                         // TODO: Handle error
                         let _ = Listener::handle_single(t.clone(), node);
                         continue;
                     } else {
-                        if let Ok(socket) = Listener::handle_active(t.clone(), node) {
-                            let (conn, handler) = Connection::new(target, socket, cache.clone());
-                            connections.add(conn);
-                            Handler::spawn(handler);
+                        let e = Listener::handle_single(t.clone(), node.clone());
+                        // TODO: Fix connection error!!
+                        if e.is_err() {
+                            if let Ok(socket) = Listener::handle_active(t.clone(), node, center) {
+                                let (conn, handler) =
+                                    Connection::new(target, socket, cache.clone());
+                                connections.add(conn);
+                                Handler::spawn(handler);
+                            }
                         }
                     }
                 }
@@ -316,16 +306,21 @@ impl Listener {
         }
     }
 
-    fn handle_active(transaction: Transaction, node: Node) -> Result<TcpStream, Error> {
+    fn handle_active(
+        transaction: Transaction,
+        node: Node,
+        center: &Center,
+    ) -> Result<TcpStream, Error> {
         match &node.link {
             Some(link) => {
                 let mut connection = TcpStream::connect(link.to_string())?;
+                let center = Node::new(center.public.clone(), Some(center.link.clone()));
                 connection.write(&transaction.as_bytes())?;
-                connection.write(&node.as_bytes())?;
+                connection.write(&center.as_bytes())?;
                 Ok(connection)
             }
             None => {
-                // no link exists, unable to connect.
+                // no link exists, unable to connect => update RT.
                 return Err(Error::Connection(String::from("no link data exists")));
             }
         }
@@ -364,6 +359,7 @@ impl Listener {
         Err(Error::Invalid(String::from("received invalid data!")))
     }
 
+    // TODO: Function contains UB of some kind?!?
     fn handle_node(socket: &mut TcpStream) -> Result<Node, Error> {
         let mut header = [0; 34];
         let _ = socket.read(&mut header);
@@ -408,9 +404,6 @@ impl Handler {
                         }
                         Action::Shutdown => {
                             break;
-                        }
-                        Action::Bootstrap(bytes) => {
-                            let _ = self.socket.write(&bytes);
                         }
                     }
                 }

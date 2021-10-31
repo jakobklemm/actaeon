@@ -29,8 +29,11 @@ pub struct Topic {
     pub channel: Channel<Command>,
     /// List of subscribers
     pub subscribers: SubscriberBucket,
+    /// The socket can get overread so a cache is required.
+    pub cache: Vec<Transaction>,
 }
 
+#[derive(Debug)]
 pub enum Command {
     Subscriber(Address),
     Unsubscriber(Address),
@@ -75,6 +78,7 @@ impl Topic {
             address,
             channel,
             subscribers: SubscriberBucket::new(subscribers),
+            cache: Vec::new(),
         }
     }
 
@@ -88,6 +92,9 @@ impl Topic {
     /// (Should it receive a Send message it will simply report an
     /// error.)
     pub fn recv(&mut self) -> Option<Transaction> {
+        if self.cache.len() != 0 {
+            return self.cache.pop();
+        }
         loop {
             match self.channel.recv() {
                 Some(m) => match m {
@@ -95,7 +102,9 @@ impl Topic {
                         return Some(t);
                     }
                     Command::Subscriber(addr) => {
-                        self.subscribers.add(addr);
+                        if addr != self.address {
+                            self.subscribers.add(addr);
+                        }
                     }
                     Command::Unsubscriber(addr) => {
                         self.subscribers.remove(&addr);
@@ -115,6 +124,9 @@ impl Topic {
     /// still uses a loop to filter out non-user messages and will
     /// return on a User message or no message at all.
     pub fn try_recv(&mut self) -> Option<Transaction> {
+        if self.cache.len() != 0 {
+            return self.cache.pop();
+        }
         loop {
             match self.channel.try_recv() {
                 Some(m) => match m {
@@ -122,7 +134,9 @@ impl Topic {
                         return Some(t);
                     }
                     Command::Subscriber(addr) => {
-                        self.subscribers.add(addr);
+                        if addr != self.address {
+                            self.subscribers.add(addr);
+                        }
                     }
                     Command::Unsubscriber(addr) => {
                         self.subscribers.remove(&addr);
@@ -146,6 +160,29 @@ impl Topic {
     /// Wire objects for a dedicated field (or to make encryption
     /// mandatory (will require more tests))).
     pub fn broadcast(&mut self, body: Vec<u8>) -> Result<(), Error> {
+        loop {
+            match self.channel.try_recv() {
+                Some(m) => match m {
+                    Command::Message(t) => {
+                        self.cache.push(t);
+                    }
+                    Command::Subscriber(addr) => {
+                        if addr != self.address {
+                            self.subscribers.add(addr);
+                        }
+                    }
+                    Command::Unsubscriber(addr) => {
+                        self.subscribers.remove(&addr);
+                    }
+                    _ => {
+                        continue;
+                    }
+                },
+                None => {
+                    break;
+                }
+            }
+        }
         for sub in &self.subscribers.subscribers {
             // TODO: Ownership issues, reduce clone calls.
             let action = Command::Broadcast(sub.clone(), body.clone());

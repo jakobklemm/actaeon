@@ -129,12 +129,14 @@ impl Table {
     /// Leaves. If the Node already exists in the table nothing will
     /// change except for the Link details.
     pub fn add(&mut self, node: Node) {
-        match self.find_mut(&node.address) {
-            Some(found) => {
-                found.link = node.link;
-            }
-            None => {
-                self.root.add(node, &self.center);
+        if &node.address != &self.center.public {
+            match self.find_mut(&node.address) {
+                Some(found) => {
+                    found.link = node.link;
+                }
+                None => {
+                    self.root.add(node, &self.center);
+                }
             }
         }
     }
@@ -239,24 +241,23 @@ impl Table {
     /// Then the distances get calculated. The function returns true
     /// if the distance between the address and the Center is smaller
     /// than atleast one of the fetched Nodes.
-    /// TODO: Testing!!!
     pub fn should_be_local(&self, address: &Address) -> bool {
         if address == &self.center.public {
             return true;
         }
-        // TODO: Add parameters
-        let nodes = self.get(address, 5);
-        let mut addrs: Vec<Address> = nodes.iter().map(|x| x.address.clone()).collect();
-        addrs.push(address.clone());
-        addrs.sort_by(|a, b| {
-            let left = (a.clone() ^ self.center.public.clone())[0];
-            let right = (b.clone() ^ self.center.public.clone())[0];
-            left.partial_cmp(&right).unwrap()
-        });
-        let index = addrs.iter().position(|e| e == address);
-        match index {
-            Some(i) => i <= 3,
-            None => false,
+        // 1. Find the closest known node to the target.
+        let nodes = self.get(address, 1);
+
+        if let Some(node) = nodes.first() {
+            // 2. Compute the distance between the target and the found node.
+            let d1 = address ^ &node.address;
+            // 3. Compute the distance between local and the target.
+            let d2 = address ^ &self.center.public;
+            // 4. Check which one is larger.
+            d2 >= d1
+        } else {
+            // Edge case: if no node exists everything should be local!
+            true
         }
     }
 
@@ -277,32 +278,27 @@ impl Safe {
 
     pub fn try_add(&self, node: Node) -> Result<(), Error> {
         let mut table = self.table.lock().unwrap();
-        (*table).root.try_add(node, &self.center)
+        (*table).try_add(node)
     }
 
     pub fn add(&self, node: Node) {
         let mut table = self.table.lock().unwrap();
-        (*table).root.add(node, &self.center);
+        (*table).add(node);
     }
 
     pub fn remove(&self, address: &Address) -> Result<(), Error> {
         let mut table = self.table.lock().unwrap();
-        (*table).root.remove(address, &self.center)
+        (*table).remove(address)
     }
 
     pub fn get_copy(&self, address: &Address, limit: usize) -> Vec<Node> {
         let table = self.table.lock().unwrap();
-        let found = (*table).root.get(address, &self.center, limit);
-        let mut nodes = Vec::new();
-        for node in found {
-            nodes.push(node.clone())
-        }
-        return nodes;
+        (*table).get_copy(address, limit)
     }
 
     pub fn capacity(&self) -> usize {
         let table = self.table.lock().unwrap();
-        (*table).root.capacity()
+        (*table).capacity()
     }
 
     pub fn status(&self, address: &Address, status: bool) {
@@ -312,7 +308,7 @@ impl Safe {
 
     pub fn len(&self) -> usize {
         let table = self.table.lock().unwrap();
-        (*table).root.len()
+        (*table).len()
     }
 
     pub fn export(&self) -> Vec<u8> {

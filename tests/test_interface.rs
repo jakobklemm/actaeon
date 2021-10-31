@@ -17,7 +17,7 @@ fn test_interface() {
 
     let linterface = Interface::new(lconfig, lcenter.clone()).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(25));
 
     let rconfig = Config::new(20, 5, 100, "127.0.0.1".to_string(), 42444);
     let (_, secret) = box_::gen_keypair();

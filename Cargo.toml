@@ -2,7 +2,7 @@
 name = "actaeon"
 version = "0.1.1"
 edition = "2018"
-keywords = ["networking", "pubsub", "decentralized", "kademlia"]
+keywords = ["networking", "pubsub", "decentral", "kademlia"]
 description = "Decentralized PubSub & messaging protocl inspired by Kademlia."
 license-file = "LICENSE"
 authors = ["Jakob Klemm <github@jeykey.net>"]
