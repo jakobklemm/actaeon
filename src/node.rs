@@ -196,6 +196,8 @@ impl Node {
         }
     }
 
+    /// Parses a convertet Vec of serialized nodes, most likely from a bootstrap
+    /// response, into a Vec of actual Nodes.
     pub fn from_bulk(bytes: Vec<u8>) -> Vec<Node> {
         if bytes.len() < 34 {
             return Vec::new();
@@ -204,38 +206,42 @@ impl Node {
                 return vec![node];
             }
         }
-        recursive_parse(bytes)
+        Node::recursive_parse(bytes)
     }
-}
 
-fn recursive_parse(data: Vec<u8>) -> Vec<Node> {
-    if data.len() == 0 {
-        return Vec::new();
-    }
-    let mut len = [0; 2];
-    let mut address = [0; 32];
-    let mut link = Vec::new();
-    let mut rest = Vec::new();
-    for (i, j) in data.iter().enumerate() {
-        if i < 2 {
-            len[i] = *j;
-        } else if i >= 2 && i <= 33 {
-            address[i - 2] = *j;
-        } else if i >= 34 && i <= (34 + util::integer(len) - 1) {
-            link.push(*j);
-        } else {
-            rest.push(*j);
+    /// Used to recursively walk through the bytes and convert them
+    /// into Nodes. This has to be done, since the length of the Link
+    /// can't be known at compile time and is encoded at
+    /// serialization.
+    fn recursive_parse(data: Vec<u8>) -> Vec<Node> {
+        if data.len() == 0 {
+            return Vec::new();
         }
+        let mut len = [0; 2];
+        let mut address = [0; 32];
+        let mut link = Vec::new();
+        let mut rest = Vec::new();
+        for (i, j) in data.iter().enumerate() {
+            if i < 2 {
+                len[i] = *j;
+            } else if i >= 2 && i <= 33 {
+                address[i - 2] = *j;
+            } else if i >= 34 && i <= (34 + util::integer(len) - 1) {
+                link.push(*j);
+            } else {
+                rest.push(*j);
+            }
+        }
+        if let Ok(addr) = Address::from_bytes(address) {
+            if let Ok(link) = Link::from_bytes(link) {
+                let node = Node::new(addr, Some(link));
+                let mut nodes = vec![node];
+                nodes.append(&mut Node::recursive_parse(rest));
+                return nodes;
+            }
+        }
+        return Node::recursive_parse(rest);
     }
-    println!("data: {:?}", data);
-    println!("rest data: {:?}", rest);
-    // TODO: Handle unwrap
-    let address = Address::from_bytes(address).unwrap();
-    let link = Link::from_bytes(link).unwrap();
-    let node = Node::new(address, Some(link));
-    let mut nodes = vec![node];
-    nodes.append(&mut recursive_parse(rest));
-    return nodes;
 }
 
 impl Ord for Node {
@@ -650,7 +656,7 @@ mod tests {
     #[test]
     fn test_node_bulk() {
         let mut bytes = Vec::new();
-        let nodes = vec![gen_node(), gen_node(), gen_node()];
+        let nodes = vec![gen_node(5), gen_node(5), gen_node(5)];
         nodes.iter().for_each(|x| {
             bytes.append(&mut x.as_bytes());
         });
@@ -659,15 +665,26 @@ mod tests {
         assert_eq!(nodes, re);
     }
 
-    fn gen_node() -> Node {
+    #[test]
+    fn test_node_bulk_random() {
+        let mut bytes = Vec::new();
+        let mut nodes = Vec::new();
+        for i in 42..142 {
+            nodes.push(gen_node(i));
+        }
+        nodes.iter().for_each(|x| {
+            bytes.append(&mut x.as_bytes());
+        });
+        let re = Node::from_bulk(bytes);
+        assert_eq!(nodes, re);
+    }
+
+    fn gen_node(len: usize) -> Node {
         let addr = Address::random();
-        let ip = [
-            rand::random::<char>().to_string(),
-            rand::random::<char>().to_string(),
-            rand::random::<char>().to_string(),
-            rand::random::<char>().to_string(),
-            rand::random::<char>().to_string(),
-        ];
+        let mut ip = Vec::new();
+        for _ in 0..len {
+            ip.push(rand::random::<char>().to_string());
+        }
         let ip = ip.join(".");
         let link = Link::new(ip, rand::random());
         Node::new(addr, Some(link))

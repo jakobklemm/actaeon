@@ -372,9 +372,14 @@ impl Wire {
         })
     }
 
-    /// Checks if every field of the wire is zero.
+    /// Checks if every field of the wire header is zero but ignores
+    /// the two length bytes.
     pub fn is_empty(&self) -> bool {
-        self.as_bytes() == [0; 142]
+        self.class == [0; 4]
+            && self.nonce == [0; 24]
+            && self.source == [0; 32]
+            && self.target == [0; 32]
+            && self.topic == [0; 32]
     }
 }
 
