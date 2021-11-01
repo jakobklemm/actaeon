@@ -1,3 +1,35 @@
+//! # Actaeon
+//!
+//! Distributed PubSub and messaging protocol for decentralized real time
+//! applications.
+//!
+//! The most important struct for the API is the `Interface`, which can be
+//! used for sending and receiving messages as well as subscribing to a
+//! `Topic`. From there most interactions with other users can be done
+//! through a `Topic`.
+//!
+//! Example:
+//! ``` rust
+//! use actaeon::{
+//!     config::Config,
+//!     node::{Center, ToAddress},
+//!     Interface,
+//! };
+//! use sodiumoxide::crypto::box_;
+//!
+//! fn main() {
+//!     let config = Config::new(20, 1, 100, "example.com".to_string(), 4242);
+//!     let (_, secret) = box_::gen_keypair();
+//!     let center = Center::new(secret, String::from("127.0.0.1"), 1235);
+//!
+//!     let interface = Interface::new(config, center).unwrap();
+//!
+//!     let mut topic = interface.subscribe(&"example".to_string().to_address().unwrap());
+//!
+//!     let _ = topic.broadcast("hello world".as_bytes().to_vec());
+//! }
+//! ```
+
 pub mod bucket;
 pub mod config;
 pub mod error;
@@ -12,12 +44,13 @@ pub mod topic;
 pub mod transaction;
 pub mod util;
 
-pub use config::Config;
+use config::Config;
 use config::Signaling as CSig;
-pub use error::Error;
+use error::Error;
 use handler::Listener;
 use message::Message;
-pub use node::{Address, Center, Node};
+use node::Address;
+pub use node::{Center, ToAddress};
 use record::RecordBucket;
 use router::Safe;
 use signaling::Signaling;
@@ -32,22 +65,46 @@ use util::Channel;
 /// The Interface will be passed up and to the user / instance. From
 /// there the user can interact (receive messages) with the listener.
 pub struct Interface {
-    /// Center used for getting message origins.
+    /// Center used for getting message origins. Is currently public
+    /// to allow the user to read the center Address.
     pub center: Center,
+    /// Channel to communicate with the Switch. The Interface is only
+    /// connected with the Switch and none of the other threads, even
+    /// though it starts them.
     switch: Channel<InterfaceAction>,
 }
 
+/// Each module that wants to interact with the Switch has a custom
+/// enum of possible cases. This is to avoid having to handle a lot of
+/// impossible cases in the Switch loop.
 pub enum InterfaceAction {
+    /// Will shut down the Switch thread. (But nothing else).
     Shutdown,
+    /// Send a complete Transaction to the Switch (and to the
+    /// TcpHandler from there). The restrictions and rules described
+    /// in the send function apply.
     Message(Transaction),
+    /// Passes a new Simple (minified version of the Topic) to the
+    /// Switch, from where the Subscribe info will be distributed
+    /// through the system.
     Subscribe(Simple),
 }
 
 impl Interface {
-    /// Creates a new Interface. This function is currently one of the
-    /// core components of starting up the system. In the future this
-    /// might have to be wrapped by a start function.
+    /// Currently there are no dedicated functions for creating and
+    /// starting the components. Instead this function does both:
+    ///
+    /// - It creates all the internally shared components like the
+    /// RecordBucket and the Table.
+    ///
+    /// - It creates all the thread objects required.
+    ///
+    /// - It starts all threads.
+    ///
+    /// Should any of the steps fail the entire function fails, which
+    /// means the system is unable to start.
     pub fn new(config: Config, center: Center) -> Result<Self, Error> {
+        // initialize
         let bucket = RecordBucket::new();
         let (switch1, switch2) = Channel::<InterfaceAction>::new();
         let (listener1, listener2) = Channel::<Transaction>::new();
@@ -83,6 +140,11 @@ impl Interface {
         })
     }
 
+    /// Creates a new Topic, both locally, on the Switch thread and
+    /// (possilby) remotely. The local topic returned contains a list
+    /// of subscribers (that will get updated and refreshed on demand)
+    /// as well as a Channel to the Switch. From there any updates are
+    /// processed.
     pub fn subscribe(self, addr: &Address) -> Topic {
         let (c1, c2) = Channel::new();
         let local = Topic::new(addr.clone(), c1, Vec::new());
@@ -91,11 +153,20 @@ impl Interface {
         local
     }
 
+    /// It is possible to ignore the entire PubSub architecture and
+    /// just send messages to another user directly. For that the
+    /// exact Address has to be known. From there a Transaction can be
+    /// constructed and distributed through the system. This function
+    /// is only recommended for specific, special reasons, otherwise
+    /// the `message` function can be used.
     pub fn send(&self, transaction: Transaction) -> Result<(), Error> {
         let action = InterfaceAction::Message(transaction);
         self.switch.send(action)
     }
 
+    /// Tries to read a message from the Interface Channel without
+    /// blocking. It only returns a transaction if a Message event was
+    /// received, any other type will be ignored.
     pub fn try_recv(&self) -> Option<Transaction> {
         if let Some(action) = self.switch.try_recv() {
             match action {
@@ -107,17 +178,29 @@ impl Interface {
         }
     }
 
+    /// Mostly the same as try_recv(), but it blocks until a Message
+    /// event is available. Should it ever return None it is likely,
+    /// that the Switch is no longer available.
     pub fn recv(&self) -> Option<Transaction> {
-        if let Some(action) = self.switch.recv() {
-            match action {
-                InterfaceAction::Message(t) => Some(t),
-                _ => None,
+        loop {
+            if let Some(action) = self.switch.recv() {
+                match action {
+                    InterfaceAction::Message(t) => {
+                        return Some(t);
+                    }
+                    _ => {
+                        continue;
+                    }
+                }
+            } else {
+                return None;
             }
-        } else {
-            None
         }
     }
 
+    /// Constructs a new Transaction from the provided target and body
+    /// and completes the missing values. The created Transaction will
+    /// be distributed automatically.
     pub fn message(&self, target: Address, body: Vec<u8>) -> Result<(), Error> {
         let message = Message::new(
             Class::Action,
@@ -126,8 +209,7 @@ impl Interface {
             Address::default(),
             body,
         );
-        let t = Transaction::new(message);
-        let action = InterfaceAction::Message(t);
+        let action = InterfaceAction::Message(Transaction::new(message));
         self.switch.send(action)
     }
 }

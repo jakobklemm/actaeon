@@ -2,11 +2,11 @@
 name = "actaeon"
 version = "0.1.2"
 edition = "2018"
-keywords = ["networking", "pubsub", "decentral", "kademlia"]
+keywords = ["networking", "pubsub", "kademlia", "decentralized"]
 description = "Decentralized PubSub & messaging protocl inspired by Kademlia."
 license-file = "LICENSE"
 authors = ["Jakob Klemm <github@jeykey.net>"]
-publish = true
+publish = false
 homepage = "https://github.com/EngineOrion/actaeon"
 repository = "https://github.com/EngineOrion/actaeon"
 

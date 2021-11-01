@@ -1,3 +1,5 @@
+# Actaeon
+
 Distributed PubSub and messaging protocol for decentralized real time
 applications.
 
@@ -34,5 +36,6 @@ There are still some unresolved issues:
 
 -   Active connections can sometimes fail without reason.
 -   Error handling for signaling & multiple signaling servers.
--   General documentation (and minor error handling).
+-   General documentation & doctests.
 -   Add more detailed logging & tracing.
+-   Handle crashed threads.
