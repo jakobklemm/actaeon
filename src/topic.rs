@@ -8,7 +8,7 @@
 //! user.
 
 use crate::error::Error;
-use crate::node::{Address, Center};
+use crate::node::Address;
 use crate::transaction::Transaction;
 use crate::util::Channel;
 
@@ -33,12 +33,31 @@ pub struct Topic {
     pub cache: Vec<Transaction>,
 }
 
+/// Since each Topic can interact with the Switch a dedicated enum is
+/// used. The user should never have to see any of them and they are
+/// only used between a Topic and the Switch.
 #[derive(Debug)]
 pub enum Command {
+    /// Informs the Topic about a new subscriber, mostly going from
+    /// the Switch to the user.
     Subscriber(Address),
+    /// Opposite of Subscriber.
     Unsubscriber(Address),
+    /// Since not all infos about the system (the Center) are known by
+    /// the Topic a message going out from the user only gets
+    /// constructed on the Switch. The Address sent here is the one of
+    /// the subscriber, this message gets sent for every subscriber in
+    /// the list.
     Broadcast(Address, Vec<u8>),
+    /// Unlike messages from the user, new updates coming from remote
+    /// nodes are passed along as entire Transactions, since the user
+    /// might want to use values beyond just the body.
     Message(Transaction),
+    /// If the Topic goes out of scope the Switch thread (and the rest
+    /// of the network) need to be informed. A custom Drop
+    /// implementation will send the Drop message to the thread. The
+    /// address is not of the Topic but of the subscriber, since each
+    /// one gets it individually.
     Drop(Address),
 }
 
@@ -57,12 +76,15 @@ pub struct SubscriberBucket {
 pub struct TopicBucket {
     /// List of Topics that will be stored on the Handler Thread.
     pub topics: Vec<Simple>,
-    /// This also requires a copy of the Center.
-    pub center: Center,
 }
 
+/// A simplified version of topics that will be used on the Switch
+/// thread. The main difference is the lack of the Subscriberbucket,
+/// which only gets stored on the user thread.
 pub struct Simple {
+    /// Matches the Topic Address owned by the user.
     pub address: Address,
+    /// Connection to the user Topic.
     pub channel: Channel<Command>,
 }
 
@@ -214,6 +236,15 @@ impl Topic {
     }
 }
 
+impl Drop for Topic {
+    fn drop(&mut self) {
+        for sub in self.subscribers.clone().into_iter() {
+            let command = Command::Drop(sub);
+            let _ = self.channel.send(command);
+        }
+    }
+}
+
 impl Simple {
     pub fn new(address: Address, channel: Channel<Command>) -> Self {
         Self { address, channel }
@@ -277,13 +308,12 @@ impl Iterator for SubscriberBucket {
 }
 
 impl TopicBucket {
-    pub fn new(center: Center) -> Self {
-        Self {
-            topics: Vec::new(),
-            center,
-        }
+    pub fn new() -> Self {
+        Self { topics: Vec::new() }
     }
 
+    /// Only adds a Simple if it doesn't exist yet, preventing
+    /// duplicates.
     pub fn add(&mut self, simple: Simple) {
         // strange namespace issues
         if TopicBucket::find(&self, &simple.address).is_none() {
@@ -291,6 +321,7 @@ impl TopicBucket {
         }
     }
 
+    /// Normal (custom) Bucket function for finding a Simple.
     pub fn find(&self, search: &Address) -> Option<&Simple> {
         let index = self.topics.iter().position(|e| &e.address == search);
         match index {
@@ -299,6 +330,7 @@ impl TopicBucket {
         }
     }
 
+    /// Normal (custom) Bucket function for finding a mut Simple.
     pub fn find_mut(&mut self, search: &Address) -> Option<&mut Simple> {
         let index = self.topics.iter().position(|e| &e.address == search);
         match index {
@@ -307,6 +339,8 @@ impl TopicBucket {
         }
     }
 
+    /// Removes a Simple from the Bucket but won't fail if it doesn't
+    /// exist.
     pub fn remove(&mut self, target: &Address) {
         let index = self.topics.iter().position(|e| &e.address == target);
         match index {
@@ -317,10 +351,8 @@ impl TopicBucket {
         }
     }
 
+    /// Checks if an item exists in the list.
     pub fn is_local(&self, query: &Address) -> bool {
-        if query == &self.center.public {
-            return true;
-        }
         match self.find(query) {
             Some(_) => true,
             None => false,

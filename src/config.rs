@@ -90,8 +90,13 @@ struct LoadCenter {
     hostname: String,
 }
 
+/// Internally it is more convenient to use a dedicated struct for the
+/// two values required for Signaling. This is not meant to be used
+/// directly by the user and it should get refactored out.
 pub struct Signaling {
+    /// The same as Config.server
     server: String,
+    /// The same as Config.port
     port: usize,
 }
 
@@ -116,10 +121,13 @@ pub struct CenterConfig {
 }
 
 impl Signaling {
+    /// Simply creates a new object around the two given values.
     pub fn new(server: String, port: usize) -> Self {
         Self { server, port }
     }
 
+    /// Turns the two fields into a String used for a TcpStream. The
+    /// same as Link::to_string().
     pub fn to_string(&self) -> String {
         let elements = [self.server.clone(), self.port.to_string()];
         elements.join(":")

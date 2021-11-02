@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn test_node_serialize() {
-        let link = Link::new(String::from("192.168.42"), 12345);
+        let link = Link::new(String::from("127.0.0.1"), 12345);
         let node = Node::new(Address::random(), Some(link));
         let serialized = node.as_bytes();
         let deserialized = Node::from_bytes(serialized).unwrap();

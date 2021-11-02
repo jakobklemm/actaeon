@@ -98,6 +98,7 @@ impl Transaction {
         }
     }
 
+    /// If the entire Transaction needs to be set by the user.
     pub fn build(uuid: Uuid, created: SystemTime, message: Message) -> Self {
         Self {
             uuid,
@@ -106,6 +107,7 @@ impl Transaction {
         }
     }
 
+    /// Parses bytes first into a Wire, then into a Transaction.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let wire = match Wire::from_bytes(&bytes) {
             Ok(data) => data,
@@ -175,6 +177,8 @@ impl Transaction {
         self.message.class.clone()
     }
 
+    /// Computes the length of the message body. The entire length of
+    /// the message would be 142 + len().
     fn len(&self) -> [u8; 2] {
         self.message.len()
     }

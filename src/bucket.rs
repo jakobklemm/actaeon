@@ -7,6 +7,8 @@
 //! they are assumed to be "equally distanced". This might not be
 //! perfect for very large buckets (higher up in the tree) but will
 //! make no difference for buckets deeper in the tree.
+//!
+//! TODO: Create generic Bucket implementation based on std HashMap.
 
 use crate::error::Error;
 use crate::node::{Address, Center, Node};

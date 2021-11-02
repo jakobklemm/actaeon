@@ -129,10 +129,12 @@ impl Listener {
     pub fn start(self) {
         thread::spawn(move || {
             // TODO: Error handler
-            let _ = Listener::run_bootstrap(&self.signaling, &self.table, &self.center);
+            let e = Listener::run_bootstrap(&self.signaling, &self.table, &self.center);
+            log::info!("signaling status: {:?}", e);
             loop {
                 // 1. Read from Channel (non-blocking)
                 if let Some(t) = self.channel.try_recv() {
+                    log::info!("received transaction from switch");
                     if t.target() == self.center.public {
                         let _ = self.channel.send(t);
                     } else {
@@ -156,10 +158,12 @@ impl Listener {
                         log::info!("new incoming TCP connection!");
                         if let Ok(header) = Listener::handle_header(&mut socket) {
                             if header == [0; 142] {
+                                log::info!("received bootstrap request");
                                 let _ = Listener::handle_bootstrap(&mut socket, &self.table);
                             } else {
                                 match Listener::handle_establish(header, &mut socket) {
                                     Ok((wire, node)) => {
+                                        log::info!("received wire object");
                                         let address = node.address.clone();
                                         // TODO: Handle error (unlikely but possible)
                                         if !self.cache.exists(&wire.uuid) {

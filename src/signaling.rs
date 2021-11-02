@@ -13,24 +13,37 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
+/// Represents all the fields needed to run the Signaling thread.
 pub struct Signaling {
+    /// Connection to the Switch.
     channel: Channel<SignalingAction>,
+    /// Time of the last action.
     last: SystemTime,
+    /// The routing table to update the statup of Nodes.
     table: Safe,
+    /// List of active actions.
     bucket: RefCell<ActionBucket>,
 }
 
+/// Instead of storing transactions this thread uses a custom type to
+/// represent pending / ongoing operations.
 #[derive(Eq, PartialEq, Clone)]
 pub struct SignalingAction {
+    /// What type of operation is ongoing.
     pub action: Type,
+    /// What node was asked.
     pub target: Address,
+    /// The uuid of the transaction.
     pub uuid: Uuid,
 }
 
+/// Collection of ongoing operations.
 pub struct ActionBucket {
     actions: Vec<SignalingAction>,
 }
 
+/// Not the same as the Transaction Class, since not all Classes are
+/// possible for Signaling actions.
 #[derive(Eq, PartialEq, Clone)]
 pub enum Type {
     Ping,
@@ -40,6 +53,7 @@ pub enum Type {
 }
 
 impl Signaling {
+    /// Creates a new Signaling object without starting the thread.
     pub fn new(channel: Channel<SignalingAction>, table: Safe) -> Self {
         Self {
             channel,
@@ -49,6 +63,7 @@ impl Signaling {
         }
     }
 
+    /// Starts the signaling thread.
     pub fn start(self) {
         thread::spawn(move || {
             loop {
@@ -97,6 +112,7 @@ impl SignalingAction {
         }
     }
 
+    /// Shorthand for creating a new Pong response.
     pub fn pong(address: Address, uuid: Uuid) -> Self {
         Self {
             action: Type::Pong,
@@ -106,6 +122,7 @@ impl SignalingAction {
         }
     }
 
+    /// Shorthand for creating a new Details response.
     pub fn details(address: Address, uuid: Uuid) -> Self {
         Self {
             action: Type::Details,
@@ -124,6 +141,7 @@ impl SignalingAction {
         }
     }
 
+    /// Converts a SignalingAction into a Transaction.
     pub fn to_transaction(&self, center: &Address) -> Transaction {
         let class = match self.action {
             Type::Lookup => Class::Lookup,

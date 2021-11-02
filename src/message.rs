@@ -38,9 +38,15 @@ pub struct Message {
     pub body: Body,
 }
 
+/// The actual body of the messages usually is just binarry data, but
+/// it still needs a custom struct to allow for easier encryption and
+/// other heleper functions.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Body {
+    /// Usually this is always true, unless specifically set
+    /// otherwise (by encrypting the data).
     is_plain: bool,
+    /// The actual body data.
     bytes: Vec<u8>,
 }
 
@@ -151,11 +157,9 @@ impl Body {
         }
     }
 
+    /// Computes the length using the system wide length function.
     pub fn len(&self) -> [u8; 2] {
-        let len = self.bytes.len();
-        let ins = len % 255;
-        let sig = len / 255;
-        [sig as u8, ins as u8]
+        crate::util::length(&self.bytes)
     }
 }
 
