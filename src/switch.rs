@@ -137,8 +137,10 @@ impl Switch {
                     }
                 }
 
+                let mut dropper: Address = Address::random();
+
                 // 2. Listen on topics Chanel.
-                for simple in &self.topics.borrow().topics {
+                for simple in self.topics.borrow().topics.iter() {
                     let topic = simple.address.clone();
                     if let Some(command) = simple.channel.try_recv() {
                         log::info!("received message from topic");
@@ -147,7 +149,7 @@ impl Switch {
                                 log::trace!("topic went out of scope");
                                 // The addr is of the user to send the
                                 // unsubscribe to, not of the topic!
-                                self.topics.borrow_mut().remove(&simple.address);
+                                dropper = simple.address.clone();
                                 let topic = simple.address.clone();
                                 if self.table.should_be_local(&topic) {
                                     let message = Message::new(
@@ -194,6 +196,8 @@ impl Switch {
                         }
                     }
                 }
+
+                self.topics.borrow_mut().remove(&dropper);
 
                 // 3. Listen on Siganling Channel.
                 if let Some(action) = self.signaling.try_recv() {

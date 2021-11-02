@@ -37,5 +37,4 @@ There are still some unresolved issues:
 -   Active connections can sometimes fail without reason.
 -   Error handling for signaling & multiple signaling servers.
 -   General documentation & doctests.
--   Add more detailed logging & tracing.
 -   Handle crashed threads.

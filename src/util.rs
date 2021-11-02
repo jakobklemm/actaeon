@@ -61,6 +61,8 @@ impl<T> Channel<T> {
     }
 }
 
+/// Computes the length of a slice and returns it in the system wide
+/// two byte array.
 pub fn length(data: &[u8]) -> [u8; 2] {
     let length = data.len();
     let sig: u8 = (length / 255) as u8;
@@ -68,10 +70,14 @@ pub fn length(data: &[u8]) -> [u8; 2] {
     [sig, ins]
 }
 
+/// Converts the standard two byte length format into a usize.
 pub fn integer(length: [u8; 2]) -> usize {
     (length[0] as usize * 255) + length[1] as usize
 }
 
+/// Most binary messages have their length as the first two bytes of
+/// the array. This function computes the length based only on the
+/// first two bytes.
 pub fn get_length(data: &[u8]) -> usize {
     data[0] as usize * 255 + data[1] as usize
 }
