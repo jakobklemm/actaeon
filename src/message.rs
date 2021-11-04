@@ -211,8 +211,8 @@ mod tests {
     fn test_message_encrypt() {
         let mut m = Message::new(
             Class::Ping,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
             Address::random(),
             Vec::new(),
         );

@@ -26,7 +26,7 @@ fn main() {
 
     let interface = Interface::new(config, center).unwrap();
 
-    let mut topic = interface.subscribe(&"example".to_string().to_address().unwrap());
+    let mut topic = interface.subscribe(&"example".to_string().to_address());
 
     let _ = topic.broadcast("hello world".as_bytes().to_vec());
 }

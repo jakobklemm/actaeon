@@ -363,9 +363,9 @@ impl Wire {
     /// Message and Transaction from the data in Wire.
     pub fn convert(self) -> Result<Transaction, Error> {
         let class = Class::from_bytes(self.class)?;
-        let source = Address::from_bytes(self.source)?;
-        let target = Address::from_bytes(self.target)?;
-        let topic = Address::from_bytes(self.topic)?;
+        let source = Address::from_bytes(self.source);
+        let target = Address::from_bytes(self.target);
+        let topic = Address::from_bytes(self.topic);
         let seed = Seed::from_bytes(&self.nonce)?;
         let uuid = Uuid::from_bytes(self.uuid);
         let message = Message::create(class, source, target, topic, seed, self.body);
@@ -409,8 +409,8 @@ mod tests {
         let data = generate_test_data();
         match Wire::from_bytes(&data) {
             Ok(wire) => {
-                assert_eq!(wire.source, Address::generate("abc").unwrap().as_bytes());
-                assert_eq!(wire.target, Address::generate("def").unwrap().as_bytes());
+                assert_eq!(wire.source, Address::generate("abc").as_bytes());
+                assert_eq!(wire.target, Address::generate("def").as_bytes());
                 assert_eq!(
                     wire.uuid,
                     Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf")
@@ -445,9 +445,9 @@ mod tests {
     fn test_transaction_new() {
         let m = Message::create(
             Class::Ping,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -458,9 +458,9 @@ mod tests {
     fn test_transaction_age() {
         let m = Message::create(
             Class::Action,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -475,9 +475,9 @@ mod tests {
 
         let m = Message::create(
             Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("abc"),
+            Address::generate("def"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -494,7 +494,7 @@ mod tests {
         let t = Transaction::from_bytes(&data).unwrap();
         assert_eq!(
             t.message.source.as_bytes(),
-            Address::generate("abc").unwrap().as_bytes()
+            Address::generate("abc").as_bytes()
         );
     }
 
@@ -505,9 +505,9 @@ mod tests {
         let seed = Seed::from_bytes(&[0; 24]).unwrap();
         let message = Message::create(
             Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("abc"),
+            Address::generate("def"),
+            Address::generate("tpc"),
             seed,
             "test".to_string().as_bytes().to_vec(),
         );
@@ -530,23 +530,11 @@ mod tests {
         data.append(&mut [0, 8].to_vec());
         data.append(&mut [0, 0, 0, 1].to_vec());
 
-        let source = Address::generate("abc")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let source = Address::generate("abc").as_bytes().to_owned().to_vec();
         data.append(&mut source.clone());
-        let target = Address::generate("def")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let target = Address::generate("def").as_bytes().to_owned().to_vec();
         data.append(&mut target.clone());
-        let target = Address::generate("tpc")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let target = Address::generate("tpc").as_bytes().to_owned().to_vec();
         data.append(&mut target.clone());
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         data.append(&mut uuid.clone().as_bytes().to_vec());
