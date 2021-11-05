@@ -159,7 +159,7 @@ impl Body {
 
     /// Computes the length using the system wide length function.
     pub fn len(&self) -> [u8; 2] {
-        crate::util::length(&self.bytes)
+        crate::util::compute_length(&self.bytes)
     }
 }
 

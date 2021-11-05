@@ -149,7 +149,7 @@ impl Node {
         match &self.link {
             Some(link) => {
                 let mut link = link.as_bytes().to_vec();
-                let mut data = util::length(&link).to_vec();
+                let mut data = util::compute_length(&link).to_vec();
                 data.append(&mut self.address.as_bytes().to_vec());
                 data.append(&mut link);
                 return data;
@@ -619,7 +619,7 @@ mod tests {
         let l = Link::new("192.168.1.42".to_string(), 2424);
         let node = Node::new(Address::random(), Some(l.clone()));
         let ser = node.as_bytes();
-        let len = util::length(&l.as_bytes());
+        let len = util::compute_length(&l.as_bytes());
         assert_eq!(ser[0..1], len[0..1]);
     }
 

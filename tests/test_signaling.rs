@@ -78,7 +78,15 @@ fn test_auto_bootstrap() {
 
     let found = rtable.get_copy(&Address::random(), 5);
     assert_eq!(found.len(), 2);
-    assert_eq!(found, vec![test_node, rnode]);
+    assert_eq!(found, vec![test_node.clone(), rnode.clone()]);
+
+    // test if the nodes are actually equal (custom Eq)
+    let mut bytes = Vec::new();
+    for n in found {
+        bytes.push(n.as_bytes());
+    }
+
+    assert_eq!(bytes, vec![test_node.as_bytes(), rnode.as_bytes()]);
 }
 
 #[test]

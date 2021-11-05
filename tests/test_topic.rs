@@ -1,20 +1,21 @@
 use actaeon::{self, config::Config, node::Center, Interface};
 
-//#[test]
+#[test]
 fn test_subscribe() {
     let port1 = 42450;
     let port2 = 42451;
+
     let lconfig = Config::new(20, 1, 100, "127.0.0.1".to_string(), port1);
     let lcenter = gen_center_near("127.0.0.1", port2);
     let linterface = Interface::new(lconfig, lcenter.clone()).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(std::time::Duration::from_millis(25));
 
     let rconfig = Config::new(20, 1, 100, "127.0.0.1".to_string(), port2);
     let rcenter = gen_center_far("127.0.0.1", port1);
     let rinterface = Interface::new(rconfig, rcenter.clone()).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(std::time::Duration::from_millis(25));
 
     let topic = Address::default();
     // the topic is guaranteed not to be on this node.
@@ -42,17 +43,20 @@ fn test_subscribe() {
 fn test_multi() {
     let port1 = 42460;
     let port2 = 42461;
+
+    std::thread::sleep(std::time::Duration::from_millis(25));
+
     let lconfig = Config::new(20, 1, 100, "127.0.0.1".to_string(), port1);
     let lcenter = gen_center_near("127.0.0.1", port2);
     let linterface = Interface::new(lconfig, lcenter.clone()).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(std::time::Duration::from_millis(25));
 
     let rconfig = Config::new(20, 1, 100, "127.0.0.1".to_string(), port2);
     let rcenter = gen_center_far("127.0.0.1", port1);
     let rinterface = Interface::new(rconfig, rcenter.clone()).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(std::time::Duration::from_millis(25));
 
     let topic = Address::default();
     // the topic is guaranteed not to be on this node.
