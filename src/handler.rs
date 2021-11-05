@@ -95,6 +95,14 @@ impl Connection {
         self.channel.try_recv()
     }
 
+    fn recv(&self) -> Option<Action> {
+        self.channel.recv()
+    }
+
+    fn send(&self, wire: Wire) -> Result<(), Error> {
+        self.channel.send(Action::Message(wire))
+    }
+
     fn address(&self) -> Address {
         self.address.clone()
     }
@@ -180,10 +188,11 @@ impl Listener {
 impl Handler {
     fn spawn(mut self) {
         thread::spawn(move || {
+            let _ = self.socket.set_nonblocking(true);
             // Dedicated thread per socket.
             loop {
                 // Incoming TCP
-                if let Ok(wire) = Handler::message(&mut self.socket) {
+                if let Ok(wire) = read_wire(&mut self.socket) {
                     if !self.cache.exists(&wire.uuid) {
                         self.cache.add(&wire.uuid);
                         let _ = self.channel.send(Action::Message(wire));
@@ -200,42 +209,14 @@ impl Handler {
                                 let e = self.socket.write(&wire.as_bytes());
                                 if e.is_err() {
                                     let _ = self.channel.send(Action::Shutdown);
-                                    break;
                                 }
                             }
                         }
-                        Action::Shutdown => {
-                            break;
-                        }
+                        Action::Shutdown => {}
                     }
                 }
             }
         });
-    }
-
-    fn message(socket: &mut TcpStream) -> Result<Wire, Error> {
-        let mut header = [0; 142];
-        let header_length = socket.read(&mut header)?;
-        if header_length != 142 {
-            return Err(Error::Invalid(String::from(
-                "Received invalid header data!",
-            )));
-        }
-        if header == [0; 142] {
-            // if the wire is empty it means a bootstrapping request,
-            // but usually there is no reason to issue a bootstrapping
-            // request on an active connection.
-        }
-        let length = util::get_length(&header);
-        let body = read(socket, length)?;
-
-        let wire: Vec<u8> = header
-            .to_vec()
-            .into_iter()
-            .chain(body.into_iter())
-            .collect();
-        let wire = Wire::from_bytes(&wire)?;
-        Ok(wire)
     }
 }
 
@@ -243,6 +224,24 @@ fn read(stream: &mut TcpStream, length: usize) -> Result<Vec<u8>, Error> {
     let mut data = vec![0; length];
     stream.read_exact(&mut data)?;
     return Ok(data);
+}
+
+fn read_wire(stream: &mut TcpStream) -> Result<Wire, Error> {
+    let mut header = [0; 142];
+    let read_len = stream.read(&mut header)?;
+    if read_len != 142 {
+        return Err(Error::Connection("unable to read header bytes".to_string()));
+    }
+    let length = util::get_length(&header);
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body)?;
+
+    let mut message = Vec::new();
+    message.append(&mut header.to_vec());
+    message.append(&mut body);
+
+    let wire = Wire::from_bytes(&message)?;
+    Ok(wire)
 }
 
 impl ConnectionBucket {
@@ -332,5 +331,52 @@ impl Cache {
             }
             None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+    use crate::transaction::{Class, Transaction};
+
+    #[test]
+    fn test_connection_life() {
+        let local = TcpListener::bind("127.0.0.1:45600").unwrap();
+        let stream = TcpStream::connect("127.0.0.1:45600").unwrap();
+        let addr = Address::random();
+
+        let message = Message::new(
+            Class::Action,
+            Address::random(),
+            Address::random(),
+            Address::random(),
+            vec![42],
+        );
+
+        let t = Transaction::new(message);
+
+        let (conn, handler) = Connection::new(addr.clone(), stream, Cache::new(100));
+
+        handler.spawn();
+
+        let (mut s, _) = local.accept().unwrap();
+        let _ = s.write(&t.as_bytes());
+
+        assert_eq!(conn.recv().unwrap(), Action::Message(t.to_wire()));
+
+        let message = Message::new(
+            Class::Action,
+            Address::random(),
+            Address::random(),
+            Address::random(),
+            vec![43],
+        );
+        let t = Transaction::new(message);
+        println!("data: sending data: {:?}", t.to_wire());
+        let _ = conn.send(t.to_wire());
+
+        let wire = read_wire(&mut s).unwrap();
+        assert_eq!(wire, t.to_wire());
     }
 }
