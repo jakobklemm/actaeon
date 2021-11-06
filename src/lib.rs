@@ -131,7 +131,7 @@ impl Interface {
         // startup
         listener.start();
         switch.start();
-        signaling.start();
+        //signaling.start();
 
         // return
         Ok(Self {

@@ -15,6 +15,7 @@
 use crate::error::Error;
 use crate::message::{Message, Seed};
 use crate::node::Address;
+use crate::util;
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -85,6 +86,9 @@ pub enum Class {
     Subscriber,
     /// Informs subscribers about a unsubscribe message.
     Unsubscriber,
+    /// Dedicated field for Bootstrap requests / repsonses. Always
+    /// only has zero bytes.
+    Bootstrap,
 }
 
 impl Transaction {
@@ -240,6 +244,7 @@ impl Class {
     /// converts that to the object using a simple lookup table.
     fn from_bytes(raw: [u8; 4]) -> Result<Self, Error> {
         match raw {
+            [0, 0, 0, 0] => Ok(Self::Bootstrap),
             [0, 0, 0, 1] => Ok(Self::Ping),
             [0, 0, 0, 2] => Ok(Self::Pong),
             [0, 0, 1, 0] => Ok(Self::Lookup),
@@ -259,6 +264,7 @@ impl Class {
     /// more types be added.
     fn as_bytes(&self) -> [u8; 4] {
         match self {
+            Self::Bootstrap => [0, 0, 0, 0],
             Self::Ping => [0, 0, 0, 1],
             Self::Pong => [0, 0, 0, 2],
             Self::Lookup => [0, 0, 1, 0],
@@ -273,6 +279,21 @@ impl Class {
 }
 
 impl Wire {
+    /// Constructs a new bootsrap Wire (All fields are zero except the
+    /// body and the length).
+    pub fn bootstrap(body: Vec<u8>) -> Self {
+        Self {
+            length: util::compute_length(&body),
+            class: [0; 4],
+            source: [0; 32],
+            target: [0; 32],
+            topic: [0; 32],
+            uuid: [0; 16],
+            nonce: [0; 24],
+            body,
+        }
+    }
+
     /// Convert raw bytes coming from the network into a Wire object.
     /// This will not parse them into a transaction, since sone
     /// decisions can already be made without it. It currently takes a
@@ -384,6 +405,11 @@ impl Wire {
             && self.source == [0; 32]
             && self.target == [0; 32]
             && self.topic == [0; 32]
+    }
+
+    /// Simple wrapper to return the body of a Wire.
+    pub fn body(&self) -> &Vec<u8> {
+        &self.body
     }
 }
 
@@ -522,6 +548,21 @@ mod tests {
         let wire = Wire::from_bytes(&bytes);
         assert_eq!(wire.is_err(), false);
         assert_eq!(wire.unwrap().is_empty(), true);
+    }
+
+    #[test]
+    fn test_test() {
+        let data = [
+            0, 1, 1, 0, 0, 1, 155, 150, 238, 120, 187, 80, 53, 188, 183, 237, 10, 137, 86, 203,
+            144, 237, 136, 129, 191, 81, 239, 98, 122, 6, 52, 12, 79, 202, 83, 191, 181, 0, 212,
+            72, 175, 115, 209, 165, 113, 173, 193, 83, 87, 23, 94, 238, 122, 26, 253, 217, 18, 65,
+            71, 158, 207, 58, 255, 65, 129, 92, 64, 193, 140, 119, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 18, 73, 34, 116,
+            193, 78, 216, 183, 76, 233, 71, 169, 150, 177, 72, 130, 49, 188, 97, 75, 86, 76, 238,
+            216, 18, 149, 247, 115, 6, 175, 30, 23, 37, 185, 248, 23, 181, 225, 100,
+        ];
+        let w = Wire::bootstrap(data.to_vec());
+        assert_eq!(w, Wire::bootstrap(vec![42]));
     }
 
     fn generate_test_data() -> Vec<u8> {
