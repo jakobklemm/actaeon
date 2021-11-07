@@ -37,6 +37,7 @@ struct Connection {
 }
 
 struct Handler {
+    center: Center,
     channel: Channel<Action>,
     socket: TcpStream,
     cache: Cache,
@@ -78,13 +79,14 @@ struct ConnectionBucket {
 }
 
 impl Connection {
-    fn new(address: Address, socket: TcpStream, cache: Cache) -> (Self, Handler) {
+    fn new(center: Center, address: Address, socket: TcpStream, cache: Cache) -> (Self, Handler) {
         let (c1, c2) = Channel::new();
         let connection = Connection {
             address,
             channel: c1,
         };
         let handler = Handler {
+            center,
             channel: c2,
             socket,
             cache,
@@ -139,7 +141,18 @@ impl Listener {
 
     pub fn start(self) {
         thread::spawn(move || {
-            let _ = Listener::bootstrap(self.signaling, &self.table, &self.center);
+            if let Ok((socket, node)) =
+                Listener::bootstrap(self.signaling, &self.table, &self.center)
+            {
+                let (conn, handler) = Connection::new(
+                    self.center.clone(),
+                    node.address,
+                    socket,
+                    self.cache.clone(),
+                );
+                handler.spawn();
+                self.connections.borrow_mut().add(conn);
+            }
             // TODO: Error handler
             loop {
                 // 1. Read from Channel (non-blocking)
@@ -165,7 +178,12 @@ impl Listener {
                             let _ = Handler::write_node(&mut stream, &self.center);
                             let addr = node.address.clone();
                             self.table.add(node);
-                            let (conn, handler) = Connection::new(addr, stream, self.cache.clone());
+                            let (conn, handler) = Connection::new(
+                                self.center.clone(),
+                                addr,
+                                stream,
+                                self.cache.clone(),
+                            );
                             handler.spawn();
                             self.connections.borrow_mut().add(conn);
                         }
@@ -242,7 +260,8 @@ impl Listener {
                 } else {
                     println!("data: new connection for {:?}", addr);
                     if let Ok(stream) = Listener::activate(t.to_wire(), node, center) {
-                        let (conn, handler) = Connection::new(addr, stream, cache.clone());
+                        let (conn, handler) =
+                            Connection::new(center.clone(), addr, stream, cache.clone());
                         handler.spawn();
                         conns.add(conn);
                     } else {
@@ -286,18 +305,22 @@ impl Listener {
         }
     }
 
-    fn bootstrap(signaling: Signaling, table: &Safe, center: &Center) -> Result<(), Error> {
+    fn bootstrap(
+        signaling: Signaling,
+        table: &Safe,
+        center: &Center,
+    ) -> Result<(TcpStream, Node), Error> {
         println!("data: running bootstrap!");
         let mut stream = TcpStream::connect(signaling.to_string())?;
         let _ = Handler::write_node(&mut stream, center);
-        let _ = Handler::read_node(&mut stream)?;
+        let node = Handler::read_node(&mut stream)?;
         let _ = stream.write(&[0; 142])?;
         let wire = Handler::read_wire(&mut stream)?;
         let nodes = Node::from_bulk(wire.body().to_vec());
         for node in nodes {
             table.add(node);
         }
-        Ok(())
+        Ok((stream, node))
     }
 }
 
@@ -309,6 +332,7 @@ impl Handler {
             let _ = self.socket.set_nonblocking(true);
             // Dedicated thread per socket.
             loop {
+                println!("data: loop active: {:?}", self.center.public);
                 // Incoming TCP
                 if let Ok(wire) = Handler::read_wire(&mut self.socket) {
                     println!("data: receiving new wire throug connection: {:?}", wire);
@@ -495,6 +519,7 @@ mod tests {
     use super::*;
     use crate::message::Message;
     use crate::transaction::{Class, Transaction};
+    use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
 
     #[test]
     fn test_connection_life() {
@@ -512,7 +537,7 @@ mod tests {
 
         let t = Transaction::new(message);
 
-        let (conn, handler) = Connection::new(addr.clone(), stream, Cache::new(100));
+        let (conn, handler) = Connection::new(gen_center(), addr.clone(), stream, Cache::new(100));
 
         handler.spawn();
 
@@ -534,5 +559,12 @@ mod tests {
 
         let wire = Handler::read_wire(&mut s).unwrap();
         assert_eq!(wire, t.to_wire());
+    }
+
+    fn gen_center() -> Center {
+        let mut b = [0; 32];
+        b[0] = 42;
+        let s = SecretKey::from_slice(&b).unwrap();
+        Center::new(s, String::from(""), 8080)
     }
 }
