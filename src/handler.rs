@@ -37,7 +37,6 @@ struct Connection {
 }
 
 struct Handler {
-    center: Center,
     channel: Channel<Action>,
     socket: TcpStream,
     cache: Cache,
@@ -79,14 +78,13 @@ struct ConnectionBucket {
 }
 
 impl Connection {
-    fn new(center: Center, address: Address, socket: TcpStream, cache: Cache) -> (Self, Handler) {
+    fn new(address: Address, socket: TcpStream, cache: Cache) -> (Self, Handler) {
         let (c1, c2) = Channel::new();
         let connection = Connection {
             address,
             channel: c1,
         };
         let handler = Handler {
-            center,
             channel: c2,
             socket,
             cache,
@@ -144,15 +142,11 @@ impl Listener {
             if let Ok((socket, node)) =
                 Listener::bootstrap(self.signaling, &self.table, &self.center)
             {
-                let (conn, handler) = Connection::new(
-                    self.center.clone(),
-                    node.address,
-                    socket,
-                    self.cache.clone(),
-                );
+                let (conn, handler) = Connection::new(node.address, socket, self.cache.clone());
                 handler.spawn();
                 self.connections.borrow_mut().add(conn);
             }
+            println!("data: bootstrap completed!");
             // TODO: Error handler
             loop {
                 // 1. Read from Channel (non-blocking)
@@ -178,12 +172,7 @@ impl Listener {
                             let _ = Handler::write_node(&mut stream, &self.center);
                             let addr = node.address.clone();
                             self.table.add(node);
-                            let (conn, handler) = Connection::new(
-                                self.center.clone(),
-                                addr,
-                                stream,
-                                self.cache.clone(),
-                            );
+                            let (conn, handler) = Connection::new(addr, stream, self.cache.clone());
                             handler.spawn();
                             self.connections.borrow_mut().add(conn);
                         }
@@ -260,8 +249,7 @@ impl Listener {
                 } else {
                     println!("data: new connection for {:?}", addr);
                     if let Ok(stream) = Listener::activate(t.to_wire(), node, center) {
-                        let (conn, handler) =
-                            Connection::new(center.clone(), addr, stream, cache.clone());
+                        let (conn, handler) = Connection::new(addr, stream, cache.clone());
                         handler.spawn();
                         conns.add(conn);
                     } else {
@@ -332,22 +320,19 @@ impl Handler {
             let _ = self.socket.set_nonblocking(true);
             // Dedicated thread per socket.
             loop {
-                println!("data: loop active: {:?}", self.center.public);
                 // Incoming TCP
                 if let Ok(wire) = Handler::read_wire(&mut self.socket) {
-                    println!("data: receiving new wire throug connection: {:?}", wire);
-                    //if !self.cache.exists(&wire.uuid) {
-                    self.cache.add(&wire.uuid);
-                    let _ = self.channel.send(Action::Message(wire));
-                    //}
+                    if !self.cache.exists(&wire.uuid) || wire.is_empty() {
+                        self.cache.add(&wire.uuid);
+                        let _ = self.channel.send(Action::Message(wire));
+                    }
                 }
 
                 // Channel messages
                 if let Some(action) = self.channel.try_recv() {
                     match action {
                         Action::Message(wire) => {
-                            if true {
-                                // !self.cache.exists(&wire.uuid) {
+                            if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                                 self.cache.add(&wire.uuid);
                                 // message
                                 println!(
@@ -391,10 +376,7 @@ impl Handler {
                 let wire = Wire::from_bytes(&message)?;
                 Ok(wire)
             }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::WouldBlock {
-                    println!("data: WOULD BLOCK ERROR!");
-                }
+            Err(_) => {
                 return Err(Error::Connection("unable to read header bytes".to_string()));
             }
         }
@@ -537,7 +519,7 @@ mod tests {
 
         let t = Transaction::new(message);
 
-        let (conn, handler) = Connection::new(gen_center(), addr.clone(), stream, Cache::new(100));
+        let (conn, handler) = Connection::new(addr.clone(), stream, Cache::new(100));
 
         handler.spawn();
 
@@ -559,12 +541,5 @@ mod tests {
 
         let wire = Handler::read_wire(&mut s).unwrap();
         assert_eq!(wire, t.to_wire());
-    }
-
-    fn gen_center() -> Center {
-        let mut b = [0; 32];
-        b[0] = 42;
-        let s = SecretKey::from_slice(&b).unwrap();
-        Center::new(s, String::from(""), 8080)
     }
 }

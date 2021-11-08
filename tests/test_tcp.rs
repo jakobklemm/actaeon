@@ -40,8 +40,8 @@ fn test_tcp_init() {
     let link = remote.link.clone();
     let node = Node::new(remote.public.clone(), Some(link));
     let mut conn = TcpStream::connect("127.0.0.1:42424").unwrap();
-    let _ = conn.write(&wire.as_bytes());
     let _ = conn.write(&node.as_bytes());
+    let _ = conn.write(&wire.as_bytes());
 
     // verify
     let recv = w2.recv().unwrap();
@@ -78,8 +78,8 @@ fn test_tcp_message() {
     let link = remote.link.clone();
     let node = Node::new(remote.public.clone(), Some(link));
     let mut conn = TcpStream::connect("127.0.0.1:42425").unwrap();
-    let _ = conn.write(&wire.as_bytes());
     let _ = conn.write(&node.as_bytes());
+    let _ = conn.write(&wire.as_bytes());
 
     let _ = w2.recv();
 
@@ -107,7 +107,7 @@ fn test_tcp_cache() {
     let center = Center::new(secret, String::from("127.0.0.1"), 42431);
     let table = Safe::new(42, center.clone());
     let signaling = Signaling::new(String::from("127.0.0.1"), 12345);
-    let listener = Listener::new(center, w1, 10, table, signaling).unwrap();
+    let listener = Listener::new(center, w1, 100, table, signaling).unwrap();
     let _ = listener.start();
 
     // message
@@ -127,8 +127,8 @@ fn test_tcp_cache() {
     let link = remote.link.clone();
     let node = Node::new(remote.public.clone(), Some(link));
     let mut conn = TcpStream::connect("127.0.0.1:42431").unwrap();
-    let _ = conn.write(&wire.as_bytes());
     let _ = conn.write(&node.as_bytes());
+    let _ = conn.write(&wire.as_bytes());
 
     let _ = w2.recv();
 
@@ -148,6 +148,7 @@ fn test_tcp_cache() {
     let _ = conn.write(&wire.as_bytes());
     let _ = w2.recv().unwrap();
     let ret = w2.try_recv();
+    //assert_eq!(r1.as_bytes(), Vec::new());
     assert_eq!(ret, None);
 }
 
@@ -178,8 +179,8 @@ fn test_tcp_random() {
     let link = remote.link.clone();
     let node = Node::new(remote.public.clone(), Some(link));
     let mut conn = TcpStream::connect("127.0.0.1:42426").unwrap();
-    let _ = conn.write(&wire.as_bytes());
     let _ = conn.write(&node.as_bytes());
+    let _ = conn.write(&wire.as_bytes());
 
     let _ = w2.recv();
 
