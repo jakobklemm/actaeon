@@ -6,7 +6,7 @@ keywords = ["networking", "pubsub", "kademlia", "decentralized"]
 description = "Decentralized PubSub & messaging protocol inspired by Kademlia."
 license-file = "LICENSE"
 authors = ["Jakob Klemm <github@jeykey.net>"]
-publish = false
+publish = true
 homepage = "https://github.com/EngineOrion/actaeon"
 repository = "https://github.com/EngineOrion/actaeon"
 
