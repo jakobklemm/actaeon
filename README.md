@@ -36,5 +36,5 @@ There are still some unresolved issues:
 
 - Error handling for signaling & multiple signaling servers.
 - Add interior mutability for topics so the user doesn't have to
-  declare them mutably.
+  declare them as mutable.
 - Handle crashed threads.
