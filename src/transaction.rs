@@ -15,6 +15,7 @@
 use crate::error::Error;
 use crate::message::{Message, Seed};
 use crate::node::Address;
+use crate::util;
 use std::cmp::Ordering;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -85,6 +86,9 @@ pub enum Class {
     Subscriber,
     /// Informs subscribers about a unsubscribe message.
     Unsubscriber,
+    /// Dedicated field for Bootstrap requests / repsonses. Always
+    /// only has zero bytes.
+    Bootstrap,
 }
 
 impl Transaction {
@@ -240,6 +244,7 @@ impl Class {
     /// converts that to the object using a simple lookup table.
     fn from_bytes(raw: [u8; 4]) -> Result<Self, Error> {
         match raw {
+            [0, 0, 0, 0] => Ok(Self::Bootstrap),
             [0, 0, 0, 1] => Ok(Self::Ping),
             [0, 0, 0, 2] => Ok(Self::Pong),
             [0, 0, 1, 0] => Ok(Self::Lookup),
@@ -259,6 +264,7 @@ impl Class {
     /// more types be added.
     fn as_bytes(&self) -> [u8; 4] {
         match self {
+            Self::Bootstrap => [0, 0, 0, 0],
             Self::Ping => [0, 0, 0, 1],
             Self::Pong => [0, 0, 0, 2],
             Self::Lookup => [0, 0, 1, 0],
@@ -273,6 +279,21 @@ impl Class {
 }
 
 impl Wire {
+    /// Constructs a new bootsrap Wire (All fields are zero except the
+    /// body and the length).
+    pub fn bootstrap(body: Vec<u8>) -> Self {
+        Self {
+            length: util::compute_length(&body),
+            class: [0; 4],
+            source: [0; 32],
+            target: [0; 32],
+            topic: [0; 32],
+            uuid: [0; 16],
+            nonce: [0; 24],
+            body,
+        }
+    }
+
     /// Convert raw bytes coming from the network into a Wire object.
     /// This will not parse them into a transaction, since sone
     /// decisions can already be made without it. It currently takes a
@@ -363,9 +384,9 @@ impl Wire {
     /// Message and Transaction from the data in Wire.
     pub fn convert(self) -> Result<Transaction, Error> {
         let class = Class::from_bytes(self.class)?;
-        let source = Address::from_bytes(self.source)?;
-        let target = Address::from_bytes(self.target)?;
-        let topic = Address::from_bytes(self.topic)?;
+        let source = Address::from_bytes(self.source);
+        let target = Address::from_bytes(self.target);
+        let topic = Address::from_bytes(self.topic);
         let seed = Seed::from_bytes(&self.nonce)?;
         let uuid = Uuid::from_bytes(self.uuid);
         let message = Message::create(class, source, target, topic, seed, self.body);
@@ -384,6 +405,11 @@ impl Wire {
             && self.source == [0; 32]
             && self.target == [0; 32]
             && self.topic == [0; 32]
+    }
+
+    /// Simple wrapper to return the body of a Wire.
+    pub fn body(&self) -> &Vec<u8> {
+        &self.body
     }
 }
 
@@ -409,8 +435,8 @@ mod tests {
         let data = generate_test_data();
         match Wire::from_bytes(&data) {
             Ok(wire) => {
-                assert_eq!(wire.source, Address::generate("abc").unwrap().as_bytes());
-                assert_eq!(wire.target, Address::generate("def").unwrap().as_bytes());
+                assert_eq!(wire.source, Address::generate("abc").as_bytes());
+                assert_eq!(wire.target, Address::generate("def").as_bytes());
                 assert_eq!(
                     wire.uuid,
                     Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf")
@@ -445,9 +471,9 @@ mod tests {
     fn test_transaction_new() {
         let m = Message::create(
             Class::Ping,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -458,9 +484,9 @@ mod tests {
     fn test_transaction_age() {
         let m = Message::create(
             Class::Action,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -475,9 +501,9 @@ mod tests {
 
         let m = Message::create(
             Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("abc"),
+            Address::generate("def"),
+            Address::generate("tpc"),
             Seed::from_bytes(&[0; 24]).unwrap(),
             Vec::new(),
         );
@@ -494,7 +520,7 @@ mod tests {
         let t = Transaction::from_bytes(&data).unwrap();
         assert_eq!(
             t.message.source.as_bytes(),
-            Address::generate("abc").unwrap().as_bytes()
+            Address::generate("abc").as_bytes()
         );
     }
 
@@ -505,9 +531,9 @@ mod tests {
         let seed = Seed::from_bytes(&[0; 24]).unwrap();
         let message = Message::create(
             Class::Ping,
-            Address::generate("abc").unwrap(),
-            Address::generate("def").unwrap(),
-            Address::generate("tpc").unwrap(),
+            Address::generate("abc"),
+            Address::generate("def"),
+            Address::generate("tpc"),
             seed,
             "test".to_string().as_bytes().to_vec(),
         );
@@ -530,23 +556,11 @@ mod tests {
         data.append(&mut [0, 8].to_vec());
         data.append(&mut [0, 0, 0, 1].to_vec());
 
-        let source = Address::generate("abc")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let source = Address::generate("abc").as_bytes().to_owned().to_vec();
         data.append(&mut source.clone());
-        let target = Address::generate("def")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let target = Address::generate("def").as_bytes().to_owned().to_vec();
         data.append(&mut target.clone());
-        let target = Address::generate("tpc")
-            .unwrap()
-            .as_bytes()
-            .to_owned()
-            .to_vec();
+        let target = Address::generate("tpc").as_bytes().to_owned().to_vec();
         data.append(&mut target.clone());
         let uuid = Uuid::parse_str(&mut "27d626f0-1515-47d4-a366-0b75ce6950bf").unwrap();
         data.append(&mut uuid.clone().as_bytes().to_vec());

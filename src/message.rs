@@ -159,7 +159,7 @@ impl Body {
 
     /// Computes the length using the system wide length function.
     pub fn len(&self) -> [u8; 2] {
-        crate::util::length(&self.bytes)
+        crate::util::compute_length(&self.bytes)
     }
 }
 
@@ -211,8 +211,8 @@ mod tests {
     fn test_message_encrypt() {
         let mut m = Message::new(
             Class::Ping,
-            Address::generate("a").unwrap(),
-            Address::generate("b").unwrap(),
+            Address::generate("a"),
+            Address::generate("b"),
             Address::random(),
             Vec::new(),
         );

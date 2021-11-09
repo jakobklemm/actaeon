@@ -254,9 +254,9 @@ impl Table {
             // 3. Compute the distance between local and the target.
             let d2 = address ^ &self.center.public;
             // 4. Check which one is larger.
-            d2 >= d1
+            d1 >= d2
         } else {
-            // Edge case: if no node exists everything should be local!
+            // Edge case: if no node exists everything should be local.
             true
         }
     }
@@ -1430,16 +1430,16 @@ mod tests {
     }
 
     fn gen_node(s: &str) -> Node {
-        Node::new(Address::generate(s).unwrap(), None)
+        Node::new(Address::generate(s), None)
     }
 
     fn gen_node_near() -> Node {
-        let addr = Address::from_bytes([0; 32]).unwrap();
+        let addr = Address::from_bytes([0; 32]);
         Node::new(addr, None)
     }
 
     fn gen_node_far() -> Node {
-        let addr = Address::from_bytes([255; 32]).unwrap();
+        let addr = Address::from_bytes([255; 32]);
         Node::new(addr, None)
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
 
         Center {
             secret,
-            public: Address::from_bytes(public).unwrap(),
+            public: Address::from_bytes(public),
             ..base
         }
     }

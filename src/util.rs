@@ -63,7 +63,7 @@ impl<T> Channel<T> {
 
 /// Computes the length of a slice and returns it in the system wide
 /// two byte array.
-pub fn length(data: &[u8]) -> [u8; 2] {
+pub fn compute_length(data: &[u8]) -> [u8; 2] {
     let length = data.len();
     let sig: u8 = (length / 255) as u8;
     let ins: u8 = (length % 255) as u8;
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_length_simple() {
         let data = vec![0, 1, 244, 213];
-        assert_eq!(length(&data), [0, 4]);
+        assert_eq!(compute_length(&data), [0, 4]);
     }
 
     #[test]
@@ -106,7 +106,7 @@ mod tests {
             outer.push(i);
         }
         outer.push(42);
-        let length = length(&outer);
+        let length = compute_length(&outer);
         assert_eq!(length, [1, 1]);
     }
 
@@ -119,7 +119,7 @@ mod tests {
             }
         }
         outer.push(42);
-        let length = length(&outer);
+        let length = compute_length(&outer);
         assert_eq!(length, [254, 1]);
     }
 
@@ -127,7 +127,7 @@ mod tests {
     fn test_length_back() {
         let data = vec![1, 2, 3, 4, 5, 6, 7];
         let len = data.len();
-        assert_eq!(len, integer(length(&data)));
+        assert_eq!(len, integer(compute_length(&data)));
     }
 
     #[test]
@@ -138,7 +138,7 @@ mod tests {
                 data.push((j % 255) as u8);
             }
             let real = data.len();
-            let len = integer(length(&data));
+            let len = integer(compute_length(&data));
             assert_eq!(real, len);
         }
     }

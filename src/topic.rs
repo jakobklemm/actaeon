@@ -31,6 +31,9 @@ pub struct Topic {
     pub subscribers: SubscriberBucket,
     /// The socket can get overread so a cache is required.
     pub cache: Vec<Transaction>,
+    /// In order to make it easier to keep the stored Addresses clean
+    /// a copy of the Center Public has to be stored in each topic.
+    public: Address,
 }
 
 /// Since each Topic can interact with the Switch a dedicated enum is
@@ -95,12 +98,18 @@ impl Topic {
     /// requires the linked Channel to be stored on the Handler
     /// therad. Instead new Topics have to be created through the
     /// interface.
-    pub fn new(address: Address, channel: Channel<Command>, subscribers: Vec<Address>) -> Self {
+    pub fn new(
+        address: Address,
+        channel: Channel<Command>,
+        subscribers: Vec<Address>,
+        public: Address,
+    ) -> Self {
         Self {
             address,
             channel,
             subscribers: SubscriberBucket::new(subscribers),
             cache: Vec::new(),
+            public,
         }
     }
 
@@ -121,10 +130,12 @@ impl Topic {
             match self.channel.recv() {
                 Some(m) => match m {
                     Command::Message(t) => {
-                        return Some(t);
+                        if t.source() != self.public {
+                            return Some(t);
+                        }
                     }
                     Command::Subscriber(addr) => {
-                        if addr != self.address {
+                        if addr != self.address && addr != self.public {
                             self.subscribers.add(addr);
                         }
                     }
@@ -153,10 +164,12 @@ impl Topic {
             match self.channel.try_recv() {
                 Some(m) => match m {
                     Command::Message(t) => {
-                        return Some(t);
+                        if t.source() != self.public {
+                            return Some(t);
+                        }
                     }
                     Command::Subscriber(addr) => {
-                        if addr != self.address {
+                        if addr != self.address && addr != self.public {
                             self.subscribers.add(addr);
                         }
                     }
@@ -186,7 +199,9 @@ impl Topic {
             match self.channel.try_recv() {
                 Some(m) => match m {
                     Command::Message(t) => {
-                        self.cache.push(t);
+                        if t.source() != self.public {
+                            self.cache.push(t);
+                        }
                     }
                     Command::Subscriber(addr) => {
                         if addr != self.address {
@@ -296,6 +311,10 @@ impl SubscriberBucket {
     /// Shorthand function for adding many Subscribers at once.
     pub fn add_bulk(&mut self, data: Vec<Address>) {
         data.iter().for_each(|x| self.add(x.clone()));
+    }
+
+    pub fn len(&self) -> usize {
+        self.subscribers.len()
     }
 }
 

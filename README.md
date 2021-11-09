@@ -26,7 +26,7 @@ fn main() {
 
     let interface = Interface::new(config, center).unwrap();
 
-    let mut topic = interface.subscribe(&"example".to_string().to_address().unwrap());
+    let mut topic = interface.subscribe(&"example".to_string().to_address());
 
     let _ = topic.broadcast("hello world".as_bytes().to_vec());
 }
@@ -34,6 +34,7 @@ fn main() {
 
 There are still some unresolved issues:
 
--   Active connections can sometimes fail without reason.
--   Error handling for signaling & multiple signaling servers.
--   Handle crashed threads.
+- Error handling for signaling & multiple signaling servers.
+- Add interior mutability for topics so the user doesn't have to
+  declare them as mutable.
+- Handle crashed threads.

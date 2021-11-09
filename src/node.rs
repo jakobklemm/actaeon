@@ -61,12 +61,10 @@ pub struct Center {
 
 /// Routing address based on kademlia keys. Poly1305 public keys are
 /// used as the actual addresses, on which distance metrics are
-/// implemented. Currently the address only has once field so a
-/// shorthand notation would be possible. But since more fields might
-/// get added in the future the classic syntax is used.
+/// implemented.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Address {
-    /// sodiumoxide poly1305 public key which is used to find and
+    /// sodiumoxide poly1305 public key which is also used to find and
     /// identify nodes.
     pub key: PublicKey,
 }
@@ -138,7 +136,7 @@ impl Node {
     /// invalid timestamp.
     pub fn default() -> Node {
         let bytes = [0; 32];
-        let address = Address::from_bytes(bytes).unwrap();
+        let address = Address::from_bytes(bytes);
         Node {
             address,
             link: None,
@@ -151,7 +149,7 @@ impl Node {
         match &self.link {
             Some(link) => {
                 let mut link = link.as_bytes().to_vec();
-                let mut data = util::length(&link).to_vec();
+                let mut data = util::compute_length(&link).to_vec();
                 data.append(&mut self.address.as_bytes().to_vec());
                 data.append(&mut link);
                 return data;
@@ -190,7 +188,7 @@ impl Node {
                     link.push(*j);
                 }
             }
-            let address = Address::from_bytes(addr)?;
+            let address = Address::from_bytes(addr);
             let link = Link::from_bytes(link)?;
             Ok(Node::new(address, Some(link)))
         }
@@ -232,13 +230,12 @@ impl Node {
                 rest.push(*j);
             }
         }
-        if let Ok(addr) = Address::from_bytes(address) {
-            if let Ok(link) = Link::from_bytes(link) {
-                let node = Node::new(addr, Some(link));
-                let mut nodes = vec![node];
-                nodes.append(&mut Node::recursive_parse(rest));
-                return nodes;
-            }
+        let addr = Address::from_bytes(address);
+        if let Ok(link) = Link::from_bytes(link) {
+            let node = Node::new(addr, Some(link));
+            let mut nodes = vec![node];
+            nodes.append(&mut Node::recursive_parse(rest));
+            return nodes;
         }
         return Node::recursive_parse(rest);
     }
@@ -304,13 +301,11 @@ impl Address {
     }
 
     /// Most of the times addresses will be created from bytes coming
-    /// over the network, this function can be used, although it might
-    /// fail if the key is invalid.
-    pub fn from_bytes(bytes: [u8; 32]) -> Result<Self, Error> {
-        if let Some(public) = PublicKey::from_slice(&bytes) {
-            Ok(Self { key: public })
-        } else {
-            Err(Error::Invalid(String::from("public key is invalid")))
+    /// over the network, this function can be used and won't fail if
+    /// the length is guaranteed.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self {
+            key: PublicKey::from_slice(&bytes).unwrap(),
         }
     }
 
@@ -363,7 +358,7 @@ impl Address {
 
     /// If a "random" Address is required this can generate a public key
     /// from an input string by hashing it.
-    pub fn generate(source: &str) -> Result<Self, Error> {
+    pub fn generate(source: &str) -> Self {
         let bytes = blake3::hash(source.as_bytes()).as_bytes().to_owned();
         Address::from_bytes(bytes)
     }
@@ -378,19 +373,18 @@ impl Address {
         (self.as_bytes()[0] ^ center.public.as_bytes()[0]).into()
     }
 
-    /// Generate a random Address (might panic in rare cases, highly
-    /// unlikely).
+    /// Generate a random Address
     pub fn random() -> Address {
         let mut bytes = [0; 32];
         for i in 0..31 {
             bytes[i] = rand::random::<u8>();
         }
-        Address::from_bytes(bytes).unwrap()
+        Address::from_bytes(bytes)
     }
 
     /// Generates a new "zero" Address with all bytes being 0.
     pub fn default() -> Address {
-        Address::from_bytes([0; 32]).unwrap()
+        Address::from_bytes([0; 32])
     }
 }
 
@@ -443,24 +437,24 @@ impl Hash for Address {
 /// different types can be used to create Addresses.
 pub trait ToAddress {
     /// Returns a new Address created from the input.
-    fn to_address(&self) -> Result<Address, Error>;
+    fn to_address(&self) -> Address;
 }
 
 impl ToAddress for String {
-    fn to_address(&self) -> Result<Address, Error> {
+    fn to_address(&self) -> Address {
         let bytes = blake3::hash(self.as_bytes()).as_bytes().to_owned();
         Address::from_bytes(bytes)
     }
 }
 
 impl ToAddress for [u8; 32] {
-    fn to_address(&self) -> Result<Address, Error> {
+    fn to_address(&self) -> Address {
         Address::from_bytes(*self)
     }
 }
 
 impl ToAddress for usize {
-    fn to_address(&self) -> Result<Address, Error> {
+    fn to_address(&self) -> Address {
         let mut bytes = [0; 32];
         let conv = self.to_be_bytes();
         for (i, j) in conv.iter().enumerate() {
@@ -537,7 +531,7 @@ mod tests {
     fn test_address_from_bytes() {
         let (p, _s) = box_::gen_keypair();
         let real = Address::new(p.clone());
-        let test = Address::from_bytes(p.0).unwrap();
+        let test = Address::from_bytes(p.0);
         assert_eq!(real.key.0, test.key.0);
     }
 
@@ -562,14 +556,14 @@ mod tests {
 
     #[test]
     fn test_address_xor() {
-        let a1 = Address::generate("test1").unwrap();
-        let a2 = Address::generate("test2").unwrap();
+        let a1 = Address::generate("test1");
+        let a2 = Address::generate("test2");
         assert_ne!(a1 ^ a2, [0; 32]);
     }
 
     #[test]
     fn test_address_xor_zero() {
-        let a = Address::generate("test").unwrap();
+        let a = Address::generate("test");
         assert_eq!(a.clone() ^ a, [0; 32]);
     }
 
@@ -577,39 +571,15 @@ mod tests {
     fn test_to_address_bytes() {
         let mut bytes = [0; 32];
         bytes[17] = 42;
-        assert_eq!(
-            bytes.clone().to_address().unwrap(),
-            Address::from_bytes(bytes).unwrap()
-        );
+        assert_eq!(bytes.clone().to_address(), Address::from_bytes(bytes),);
     }
 
     #[test]
     fn test_address_form_bytes_zero() {
         let b = [0; 32];
-        let a = Address::from_bytes(b).unwrap();
+        let a = Address::from_bytes(b);
         let c = a.as_bytes();
         assert_eq!(b, c);
-    }
-
-    #[test]
-    fn test_to_address_string() {
-        let source = String::from("test");
-        let addr = source.to_address();
-        assert_eq!(addr.is_err(), false);
-    }
-
-    #[test]
-    fn test_to_address_u8() {
-        let source = [0; 32];
-        let addr = source.to_address();
-        assert_eq!(addr.is_err(), false);
-    }
-
-    #[test]
-    fn test_to_address_usize() {
-        let source = 42;
-        let addr = source.to_address();
-        assert_eq!(addr.is_err(), false);
     }
 
     #[test]
@@ -649,7 +619,7 @@ mod tests {
         let l = Link::new("192.168.1.42".to_string(), 2424);
         let node = Node::new(Address::random(), Some(l.clone()));
         let ser = node.as_bytes();
-        let len = util::length(&l.as_bytes());
+        let len = util::compute_length(&l.as_bytes());
         assert_eq!(ser[0..1], len[0..1]);
     }
 

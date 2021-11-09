@@ -296,7 +296,7 @@ mod tests {
     }
 
     fn gen_node(s: &str) -> Node {
-        Node::new(Address::generate(s).unwrap(), None)
+        Node::new(Address::generate(s), None)
     }
 
     fn gen_center() -> Center {

@@ -6,7 +6,7 @@
 
 use crate::config::Signaling;
 use crate::error::Error;
-use crate::node::{Address, Center, Node};
+use crate::node::{Address, Center, Link, Node};
 use crate::router::Safe;
 use crate::transaction::{Transaction, Wire};
 use crate::util::{self, Channel};
@@ -30,6 +30,7 @@ pub struct Listener {
     signaling: Signaling,
 }
 
+#[derive(Debug)]
 struct Connection {
     address: Address,
     channel: Channel<Action>,
@@ -70,8 +71,10 @@ struct Cache {
     limit: usize,
 }
 
+#[derive(Debug)]
 struct ConnectionBucket {
     pub connections: Vec<Connection>,
+    pub limit: usize,
 }
 
 impl Connection {
@@ -91,8 +94,12 @@ impl Connection {
 
     /// Since there is no reason to use a blocking function on the
     /// Connection directly only the non-blocking function is exposed.
-    fn try_recv(&self) -> Option<Action> {
+    pub fn try_recv(&self) -> Option<Action> {
         self.channel.try_recv()
+    }
+
+    pub fn send(&self, wire: Wire) -> Result<(), Error> {
+        self.channel.send(Action::Message(wire))
     }
 
     fn address(&self) -> Address {
@@ -115,9 +122,9 @@ impl Listener {
         let listener = Self {
             center,
             listener,
-            // TODO: Add param
+            // TODO: Add params
             cache: Cache::new(100),
-            connections: RefCell::new(ConnectionBucket::new()),
+            connections: RefCell::new(ConnectionBucket::new(10)),
             channel,
             limit,
             table,
@@ -128,166 +135,109 @@ impl Listener {
 
     pub fn start(self) {
         thread::spawn(move || {
+            if let Ok((socket, node)) =
+                Listener::bootstrap(self.signaling, &self.table, &self.center)
+            {
+                let (conn, handler) = Connection::new(node.address, socket, self.cache.clone());
+                handler.spawn();
+                self.connections.borrow_mut().add(conn);
+            }
             // TODO: Error handler
-            let e = Listener::run_bootstrap(&self.signaling, &self.table, &self.center);
-            log::info!("signaling status: {:?}", e);
             loop {
                 // 1. Read from Channel (non-blocking)
                 if let Some(t) = self.channel.try_recv() {
-                    log::info!("received transaction from switch");
                     if t.target() == self.center.public {
                         let _ = self.channel.send(t);
                     } else {
-                        let e = Listener::distribute(
+                        let _ = Listener::distribute(
                             t,
                             &self.table,
-                            &mut self.connections.borrow_mut(),
                             &self.cache,
+                            &mut self.connections.borrow_mut(),
                             &self.center,
                             self.limit,
                         );
-                        if e.is_err() {
-                            log::error!("unable to distribute message: {}", e.unwrap_err());
-                        }
                     }
                 }
 
                 // 2. Read from TCP listener
                 match self.listener.accept() {
-                    Ok((mut socket, _addr)) => {
-                        log::info!("new incoming TCP connection!");
-                        if let Ok(header) = Listener::handle_header(&mut socket) {
-                            if header == [0; 142] {
-                                log::info!("received bootstrap request");
-                                let _ = Listener::handle_bootstrap(&mut socket, &self.table);
-                            } else {
-                                match Listener::handle_establish(header, &mut socket) {
-                                    Ok((wire, node)) => {
-                                        log::info!("received wire object");
-                                        let address = node.address.clone();
-                                        // TODO: Handle error (unlikely but possible)
-                                        if !self.cache.exists(&wire.uuid) {
-                                            self.cache.add(&wire.uuid);
-                                            let t = Transaction::from_wire(&wire).unwrap();
-                                            if self.table.should_be_local(&t.target()) {
-                                                let _ = self.channel.send(t);
-                                            } else {
-                                                let _ = Listener::distribute(
-                                                    t,
-                                                    &self.table,
-                                                    &mut self.connections.borrow_mut(),
-                                                    &self.cache,
-                                                    &self.center,
-                                                    self.limit,
-                                                );
-                                            }
-                                            // Check if still space available.
-                                            if self.connections.borrow().len() >= self.limit {
-                                                // No space => drop conn.
-                                                continue;
-                                            }
-                                            let (connection, handler) = Connection::new(
-                                                address,
-                                                socket,
-                                                self.cache.clone(),
-                                            );
-                                            self.connections.borrow_mut().add(connection);
-                                            Handler::spawn(handler);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::warn!("received invalid TCP data: {}", e);
-                                    }
-                                }
-                            }
+                    Ok((mut stream, _addr)) => {
+                        if let Ok(node) = Handler::read_node(&mut stream) {
+                            let _ = Handler::write_node(&mut stream, &self.center);
+                            let addr = node.address.clone();
+                            self.table.add(node);
+                            let (conn, handler) = Connection::new(addr, stream, self.cache.clone());
+                            handler.spawn();
+                            self.connections.borrow_mut().add(conn);
                         }
+                        // if any of the steps fail the connection gets dropped.
                     }
                     Err(_) => {
                         log::error!("unable to handle incoming TCP connection.");
                     }
                 }
 
-                // 3. Read from each Connection Channel.
-                for conn in self.connections.borrow().connections.iter() {
-                    if let Some(action) = conn.try_recv() {
-                        match action {
-                            Action::Message(wire) => {
-                                let t = Transaction::from_wire(&wire).unwrap();
-                                let _ = self.channel.send(t);
-                            }
-                            Action::Shutdown => {
-                                let addr = conn.address();
-                                self.connections.borrow_mut().remove(&addr);
+                // 3. Read from Connection channels
+                {
+                    let mut drop = false;
+                    let mut addr = Address::random();
+                    // 3. Read from each Connection Channel.
+                    for conn in self.connections.borrow().connections.iter() {
+                        if let Some(action) = conn.try_recv() {
+                            match action {
+                                Action::Message(wire) => {
+                                    if wire.is_empty() {
+                                        let response = Wire::bootstrap(self.table.export());
+                                        let _ = conn.send(response);
+                                    } else {
+                                        let t = Transaction::from_wire(&wire).unwrap();
+                                        let _ = self.channel.send(t);
+                                    }
+                                }
+                                Action::Shutdown => {
+                                    //self.connections.borrow_mut().remove(&addr);
+                                    drop = true;
+                                    addr = conn.address();
+                                }
                             }
                         }
+                    }
+                    if drop {
+                        self.connections.borrow_mut().remove(&addr);
                     }
                 }
             }
         });
     }
 
-    fn run_bootstrap(signaling: &Signaling, table: &Safe, center: &Center) -> Result<(), Error> {
-        let mut stream = TcpStream::connect(signaling.to_string())?;
-        stream.write(&[0; 142])?;
-        let mut length = [0; 2];
-        let _ = stream.read(&mut length);
-        let length = util::integer(length);
-        let mut bytes = vec![0; length];
-        stream.read(&mut bytes)?;
-        // send this center
-        let node = Node::new(center.public.clone(), Some(center.link.clone())).as_bytes();
-        stream.write(&node)?;
-        let nodes = Node::from_bulk(bytes);
-        for node in nodes {
-            table.add(node);
-        }
-        Ok(())
-    }
-
-    fn handle_bootstrap(stream: &mut TcpStream, table: &Safe) -> Result<(), Error> {
-        let nodes = table.export();
-        let length = util::length(&nodes);
-        stream.write(&length)?;
-        stream.write(&nodes)?;
-        let node = Listener::handle_node(stream)?;
-        table.add(node);
-        Ok(())
-    }
-
     fn distribute(
         t: Transaction,
         table: &Safe,
-        connections: &mut ConnectionBucket,
         cache: &Cache,
+        conns: &mut ConnectionBucket,
         center: &Center,
         limit: usize,
     ) -> Result<(), Error> {
-        let targets = table.get_copy(&t.target(), limit);
+        let target = t.target();
+        let targets = table.get_copy(&target, limit);
         if targets.len() == 0 {
-            return Err(Error::System(String::from("no target nodes found.")));
+            return Err(Error::System("no target nodes found".to_string()));
         }
         for node in targets {
-            let target = node.address.clone();
-            match connections.get(&target) {
-                Some(conn) => {
-                    let _ = conn.channel.send(Action::Message(t.to_wire()));
-                }
-                None => {
-                    if connections.len() >= limit {
-                        // TODO: Handle error
-                        let _ = Listener::handle_single(t.clone(), node);
-                        continue;
+            let addr = node.address.clone();
+            if let Some(conn) = conns.get(&addr) {
+                return conn.send(t.to_wire());
+            } else {
+                if conns.len() >= conns.limit {
+                    return Listener::write(t.to_wire(), node, center);
+                } else {
+                    if let Ok(stream) = Listener::activate(t.to_wire(), node, center) {
+                        let (conn, handler) = Connection::new(addr, stream, cache.clone());
+                        handler.spawn();
+                        conns.add(conn);
                     } else {
-                        let e = Listener::handle_single(t.clone(), node.clone());
-                        // TODO: Fix connection error!!
-                        if e.is_err() {
-                            if let Ok(socket) = Listener::handle_active(t.clone(), node, center) {
-                                let (conn, handler) =
-                                    Connection::new(target, socket, cache.clone());
-                                connections.add(conn);
-                                Handler::spawn(handler);
-                            }
-                        }
+                        // TODO: Update RT, deactivate
                     }
                 }
             }
@@ -295,98 +245,67 @@ impl Listener {
         Ok(())
     }
 
-    fn handle_single(transaction: Transaction, node: Node) -> Result<(), Error> {
+    fn write(wire: Wire, node: Node, center: &Center) -> Result<(), Error> {
         match node.link {
             Some(link) => {
-                let mut connection = TcpStream::connect(link.to_string())?;
-                connection.write(&transaction.as_bytes())?;
-                // Drop connection again.
-                Ok(())
+                let mut stream = TcpStream::connect(link.to_string())?;
+                let _ = Handler::write_node(&mut stream, center);
+                // The node link is already known and correct.
+                let _ = Handler::read_node(&mut stream)?;
+                stream.write(&wire.as_bytes())?;
+                return Ok(());
             }
             None => {
-                // no link exists, unable to connect.
                 return Err(Error::Connection(String::from("no link data exists")));
             }
         }
     }
 
-    fn handle_active(
-        transaction: Transaction,
-        node: Node,
-        center: &Center,
-    ) -> Result<TcpStream, Error> {
-        match &node.link {
+    fn activate(wire: Wire, node: Node, center: &Center) -> Result<TcpStream, Error> {
+        match node.link {
             Some(link) => {
-                let mut connection = TcpStream::connect(link.to_string())?;
-                let center = Node::new(center.public.clone(), Some(center.link.clone()));
-                connection.write(&transaction.as_bytes())?;
-                connection.write(&center.as_bytes())?;
-                Ok(connection)
+                let mut stream = TcpStream::connect(link.to_string())?;
+                let _ = Handler::write_node(&mut stream, center);
+                // The node link is already known and correct.
+                let _ = Handler::read_node(&mut stream)?;
+                stream.write(&wire.as_bytes())?;
+                return Ok(stream);
             }
             None => {
-                // no link exists, unable to connect => update RT.
                 return Err(Error::Connection(String::from("no link data exists")));
             }
         }
     }
 
-    fn handle_establish(header: [u8; 142], socket: &mut TcpStream) -> Result<(Wire, Node), Error> {
-        let length = util::get_length(&header);
-        let body = Listener::handle_body(socket, length)?;
-        let wire: Vec<u8> = header
-            .to_vec()
-            .into_iter()
-            .chain(body.into_iter())
-            .collect();
-        let wire = Wire::from_bytes(&wire)?;
-        let node = Listener::handle_node(socket)?;
-        Ok((wire, node))
-    }
-
-    fn handle_header(socket: &mut TcpStream) -> Result<[u8; 142], Error> {
-        let mut header: [u8; 142] = [0; 142];
-        if let Ok(length) = socket.read(&mut header) {
-            if length < 142 {
-                return Err(Error::Invalid(String::from("received invalid data!")));
-            }
-            Ok(header)
-        } else {
-            Err(Error::Invalid(String::from("received invalid data!")))
+    fn bootstrap(
+        signaling: Signaling,
+        table: &Safe,
+        center: &Center,
+    ) -> Result<(TcpStream, Node), Error> {
+        let mut stream = TcpStream::connect(signaling.to_string())?;
+        let _ = Handler::write_node(&mut stream, center);
+        let node = Handler::read_node(&mut stream)?;
+        let _ = stream.write(&[0; 142])?;
+        let wire = Handler::read_wire(&mut stream)?;
+        let nodes = Node::from_bulk(wire.body().to_vec());
+        for node in nodes {
+            table.add(node);
         }
-    }
-
-    fn handle_body(socket: &mut TcpStream, length: usize) -> Result<Vec<u8>, Error> {
-        let mut body: Vec<u8> = vec![0; length];
-        if let Ok(_length) = socket.read_exact(&mut body) {
-            return Ok(body);
-        }
-        Err(Error::Invalid(String::from("received invalid data!")))
-    }
-
-    // TODO: Function contains UB of some kind?!?
-    fn handle_node(socket: &mut TcpStream) -> Result<Node, Error> {
-        let mut header = [0; 34];
-        let _ = socket.read(&mut header);
-        let length = [header[0], header[1]];
-        let length = util::integer(length);
-        let mut link: Vec<u8> = vec![0; length];
-        let _ = socket.read_exact(&mut link);
-        let mut node_bytes = Vec::new();
-        node_bytes.append(&mut header.to_vec());
-        node_bytes.append(&mut link);
-        let node = Node::from_bytes(node_bytes)?;
-        Ok(node)
+        Ok((stream, node))
     }
 }
 
 impl Handler {
     fn spawn(mut self) {
         thread::spawn(move || {
+            // Otherwise the read_wire will be blocking and only allow
+            // one iteration for each incoming message.
+            let _ = self.socket.set_nonblocking(true);
             // Dedicated thread per socket.
             loop {
                 // Incoming TCP
-                if let Ok(wire) = Handler::message(&mut self.socket) {
-                    if !self.cache.exists(&wire.uuid) {
+                if let Ok(wire) = Handler::read_wire(&mut self.socket) {
+                    if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                         self.cache.add(&wire.uuid);
                         let _ = self.channel.send(Action::Message(wire));
                     }
@@ -396,10 +315,10 @@ impl Handler {
                 if let Some(action) = self.channel.try_recv() {
                     match action {
                         Action::Message(wire) => {
-                            if !self.cache.exists(&wire.uuid) {
+                            if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                                 self.cache.add(&wire.uuid);
-                                // message
-                                let e = self.socket.write(&wire.as_bytes());
+                                let message = wire.as_bytes();
+                                let e = self.socket.write(&message);
                                 if e.is_err() {
                                     let _ = self.channel.send(Action::Shutdown);
                                     break;
@@ -415,29 +334,50 @@ impl Handler {
         });
     }
 
-    fn message(socket: &mut TcpStream) -> Result<Wire, Error> {
+    fn read_wire(stream: &mut TcpStream) -> Result<Wire, Error> {
         let mut header = [0; 142];
-        let header_length = socket.read(&mut header)?;
-        if header_length != 142 {
-            return Err(Error::Invalid(String::from(
-                "Received invalid header data!",
-            )));
+        match stream.read(&mut header) {
+            Ok(read_len) => {
+                if read_len != 142 {
+                    return Err(Error::Connection("unable to read header bytes".to_string()));
+                }
+                let length = util::get_length(&header);
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body)?;
+
+                let mut message = Vec::new();
+                message.append(&mut header.to_vec());
+                message.append(&mut body);
+
+                let wire = Wire::from_bytes(&message)?;
+                Ok(wire)
+            }
+            Err(_) => {
+                return Err(Error::Connection("unable to read header bytes".to_string()));
+            }
         }
-        if header == [0; 142] {
-            // if the wire is empty it means a bootstrapping request,
-            // but the wire still gets processed up the chain until
-            // the listener.
+    }
+
+    fn read_node(stream: &mut TcpStream) -> Result<Node, Error> {
+        let mut header = [0; 34];
+        let header_length = stream.read(&mut header)?;
+        if header_length != 34 {
+            return Err(Error::Connection("unable to read header bytes".to_string()));
         }
         let length = util::get_length(&header);
-        let mut body: Vec<u8> = vec![0; length];
-        socket.read_exact(&mut body)?;
-        let wire: Vec<u8> = header
-            .to_vec()
-            .into_iter()
-            .chain(body.into_iter())
-            .collect();
-        let wire = Wire::from_bytes(&wire)?;
-        Ok(wire)
+        let mut link = vec![0; length];
+        stream.read_exact(&mut link)?;
+
+        let addr = Address::from_slice(&header[2..])?;
+        let link = Link::from_bytes(link)?;
+        let node = Node::new(addr, Some(link));
+        Ok(node)
+    }
+
+    fn write_node(stream: &mut TcpStream, center: &Center) -> Result<(), Error> {
+        let node = Node::new(center.public.clone(), Some(center.link.clone()));
+        stream.write(&node.as_bytes())?;
+        Ok(())
     }
 }
 
@@ -445,9 +385,10 @@ impl ConnectionBucket {
     /// Creates a new SubscriberBucket. Currently there are no limits
     /// or other properties so the Bucket is simply an unlimited
     /// Vec.
-    fn new() -> Self {
+    fn new(limit: usize) -> Self {
         Self {
             connections: Vec::new(),
+            limit,
         }
     }
 
@@ -528,5 +469,53 @@ impl Cache {
             }
             None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::Message;
+    use crate::transaction::{Class, Transaction};
+
+    #[test]
+    fn test_connection_life() {
+        let local = TcpListener::bind("127.0.0.1:45600").unwrap();
+        let stream = TcpStream::connect("127.0.0.1:45600").unwrap();
+        let addr = Address::random();
+
+        let message = Message::new(
+            Class::Action,
+            Address::random(),
+            Address::random(),
+            Address::random(),
+            vec![42],
+        );
+
+        let t = Transaction::new(message);
+
+        let (conn, handler) = Connection::new(addr.clone(), stream, Cache::new(100));
+
+        handler.spawn();
+
+        let (mut s, _) = local.accept().unwrap();
+        let _ = s.write(&t.as_bytes());
+
+        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        assert_eq!(conn.try_recv().unwrap(), Action::Message(t.to_wire()));
+
+        let message = Message::new(
+            Class::Action,
+            Address::random(),
+            Address::random(),
+            Address::random(),
+            vec![43],
+        );
+        let t = Transaction::new(message);
+        let _ = conn.send(t.to_wire());
+
+        let wire = Handler::read_wire(&mut s).unwrap();
+        assert_eq!(wire, t.to_wire());
     }
 }
