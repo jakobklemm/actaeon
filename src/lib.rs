@@ -147,7 +147,7 @@ impl Interface {
     /// processed.
     pub fn subscribe(self, addr: &Address) -> Topic {
         let (c1, c2) = Channel::new();
-        let local = Topic::new(addr.clone(), c1, Vec::new());
+        let local = Topic::new(addr.clone(), c1, Vec::new(), self.center.public.clone());
         let remote = Simple::new(addr.clone(), c2);
         let _ = self.switch.send(InterfaceAction::Subscribe(remote));
         local

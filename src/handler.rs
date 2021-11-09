@@ -94,15 +94,11 @@ impl Connection {
 
     /// Since there is no reason to use a blocking function on the
     /// Connection directly only the non-blocking function is exposed.
-    fn try_recv(&self) -> Option<Action> {
+    pub fn try_recv(&self) -> Option<Action> {
         self.channel.try_recv()
     }
 
-    fn recv(&self) -> Option<Action> {
-        self.channel.recv()
-    }
-
-    fn send(&self, wire: Wire) -> Result<(), Error> {
+    pub fn send(&self, wire: Wire) -> Result<(), Error> {
         self.channel.send(Action::Message(wire))
     }
 
@@ -146,7 +142,6 @@ impl Listener {
                 handler.spawn();
                 self.connections.borrow_mut().add(conn);
             }
-            println!("data: bootstrap completed!");
             // TODO: Error handler
             loop {
                 // 1. Read from Channel (non-blocking)
@@ -194,10 +189,6 @@ impl Listener {
                                 Action::Message(wire) => {
                                     if wire.is_empty() {
                                         let response = Wire::bootstrap(self.table.export());
-                                        println!(
-                                            "data: received bootstrap request, response: {:?}",
-                                            response
-                                        );
                                         let _ = conn.send(response);
                                     } else {
                                         let t = Transaction::from_wire(&wire).unwrap();
@@ -228,7 +219,6 @@ impl Listener {
         center: &Center,
         limit: usize,
     ) -> Result<(), Error> {
-        println!("data: sending message: {:?}", t);
         let target = t.target();
         let targets = table.get_copy(&target, limit);
         if targets.len() == 0 {
@@ -260,8 +250,8 @@ impl Listener {
             Some(link) => {
                 let mut stream = TcpStream::connect(link.to_string())?;
                 let _ = Handler::write_node(&mut stream, center);
-                let node = Handler::read_node(&mut stream)?;
-                println!("data: received node from single write: {:?}", node);
+                // The node link is already known and correct.
+                let _ = Handler::read_node(&mut stream)?;
                 stream.write(&wire.as_bytes())?;
                 return Ok(());
             }
@@ -276,8 +266,8 @@ impl Listener {
             Some(link) => {
                 let mut stream = TcpStream::connect(link.to_string())?;
                 let _ = Handler::write_node(&mut stream, center);
-                let node = Handler::read_node(&mut stream)?;
-                println!("data: received node from activaition: {:?}", node);
+                // The node link is already known and correct.
+                let _ = Handler::read_node(&mut stream)?;
                 stream.write(&wire.as_bytes())?;
                 return Ok(stream);
             }
@@ -292,7 +282,6 @@ impl Listener {
         table: &Safe,
         center: &Center,
     ) -> Result<(TcpStream, Node), Error> {
-        println!("data: running bootstrap!");
         let mut stream = TcpStream::connect(signaling.to_string())?;
         let _ = Handler::write_node(&mut stream, center);
         let node = Handler::read_node(&mut stream)?;
@@ -328,19 +317,15 @@ impl Handler {
                         Action::Message(wire) => {
                             if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                                 self.cache.add(&wire.uuid);
-                                // message
-                                println!("data: using existing connection",);
                                 let message = wire.as_bytes();
                                 let e = self.socket.write(&message);
                                 if e.is_err() {
                                     let _ = self.channel.send(Action::Shutdown);
-                                    println!("data: terminating thread!");
                                     break;
                                 }
                             }
                         }
                         Action::Shutdown => {
-                            println!("data: terminating thread!");
                             break;
                         }
                     }
@@ -516,7 +501,9 @@ mod tests {
         let (mut s, _) = local.accept().unwrap();
         let _ = s.write(&t.as_bytes());
 
-        assert_eq!(conn.recv().unwrap(), Action::Message(t.to_wire()));
+        std::thread::sleep(std::time::Duration::from_millis(16));
+
+        assert_eq!(conn.try_recv().unwrap(), Action::Message(t.to_wire()));
 
         let message = Message::new(
             Class::Action,
@@ -526,7 +513,6 @@ mod tests {
             vec![43],
         );
         let t = Transaction::new(message);
-        println!("data: sending data: {:?}", t.to_wire());
         let _ = conn.send(t.to_wire());
 
         let wire = Handler::read_wire(&mut s).unwrap();

@@ -34,6 +34,7 @@ fn main() {
 
 There are still some unresolved issues:
 
--   Active connections can sometimes fail without reason.
--   Error handling for signaling & multiple signaling servers.
--   Handle crashed threads.
+- Error handling for signaling & multiple signaling servers.
+- Add interior mutability for topics so the user doesn't have to
+  declare them mutably.
+- Handle crashed threads.

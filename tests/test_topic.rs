@@ -6,7 +6,7 @@ use actaeon::{
 };
 use sodiumoxide::crypto::box_;
 
-//#[test]
+#[test]
 fn test_topic_multi() {
     let port1 = 42460;
     let port2 = 42461;
@@ -106,26 +106,18 @@ fn test_topic_random() {
     std::thread::sleep(std::time::Duration::from_millis(10));
 
     for i in 0..23 {
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(8));
         let _ = ltopic.broadcast(vec![i]);
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(8));
         let rret = rtopic.recv().unwrap();
-        println!("data: received message: {:?}", rret);
         assert_eq!(rret.message.body.as_bytes(), vec![i]);
     }
 
-    println!("data: finished block one!");
-
     for i in 0..55 {
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(8));
         let _ = rtopic.broadcast(vec![i]);
-        println!("data: broadcast message of new loop: {:?}", i);
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        std::thread::sleep(std::time::Duration::from_millis(8));
         let rret = ltopic.recv().unwrap();
-        println!("data: received message: {:?}", rret);
         assert_eq!(rret.message.body.as_bytes(), vec![i]);
-        if i == 0 {
-            println!("data: completed first block one iteration!");
-        }
     }
 }

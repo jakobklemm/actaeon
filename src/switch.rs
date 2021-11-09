@@ -99,48 +99,27 @@ impl Switch {
                             let _ = self.listener.send(transaction);
                         }
                         InterfaceAction::Subscribe(simple) => {
-                            log::trace!("received subscribe resquest from the user");
-                            let target = simple.address.clone();
+                            log::trace!("received subscribe action from the user");
+                            let topic = simple.address.clone();
                             self.topics.borrow_mut().add(simple);
-                            if self.table.should_be_local(&target) {
-                                println!(
-                                    "data: Current RT state: {:?}",
-                                    self.table.get_copy(&Address::random(), 5)
-                                );
-                                println!(
-                                    "data: topic is local: {:?}, center: {:?}",
-                                    target, self.center.public
-                                );
-                                let message = Message::new(
-                                    Class::Subscribe,
-                                    self.center.public.clone(),
-                                    target.clone(),
-                                    target,
-                                    Vec::new(),
-                                );
-                                let t = Transaction::new(message);
-
+                            let message = Message::new(
+                                Class::Subscribe,
+                                self.center.public.clone(),
+                                topic.clone(),
+                                topic.clone(),
+                                vec![],
+                            );
+                            let transaction = Transaction::new(message);
+                            if self.table.should_be_local(&topic) {
                                 Switch::handle_subscribe(
-                                    t,
+                                    transaction,
                                     &self.listener,
                                     &self.records,
                                     &self.topics,
                                     &self.center,
-                                )
-                            } else {
-                                println!("data: topic should not be handled locally");
-                                let message = Message::new(
-                                    Class::Subscribe,
-                                    self.center.public.clone(),
-                                    target.clone(),
-                                    // the subscribe action corresponds to
-                                    // no topic, but for simplicity the
-                                    // target is used twice.
-                                    target,
-                                    Vec::new(),
                                 );
-                                let t = Transaction::new(message);
-                                let _ = self.listener.send(t);
+                            } else {
+                                let _ = self.listener.send(transaction);
                             }
                         }
                     }
@@ -156,7 +135,6 @@ impl Switch {
                         log::info!("received message from topic");
                         match command {
                             Command::Drop(addr) => {
-                                println!("data: dropping topic!");
                                 log::trace!("topic went out of scope");
                                 // The addr is of the user to send the
                                 // unsubscribe to, not of the topic!
@@ -194,7 +172,6 @@ impl Switch {
                             }
                             Command::Broadcast(addr, body) => {
                                 log::trace!("received broadcast from user");
-                                println!("data: message received on switch: {:?}", body);
                                 let message = Message::new(
                                     Class::Action,
                                     self.center.public.clone(),
@@ -205,9 +182,7 @@ impl Switch {
                                 let t = Transaction::new(message);
                                 let _ = self.listener.send(t);
                             }
-                            _ => {
-                                println!("data: UB");
-                            }
+                            _ => {}
                         }
                     } else {
                     }
@@ -259,31 +234,24 @@ impl Switch {
                         // Error: Subscriber, Unsubscribe
                         match t.class() {
                             Class::Ping => {
-                                log::trace!("incoming ping message");
                                 Switch::handle_ping(t, &self.listener, &self.center);
                             }
                             Class::Pong => {
-                                log::trace!("incoming pong message");
                                 Switch::handle_pong(t, &self.signaling);
                             }
                             Class::Lookup => {
-                                log::trace!("incoming lookup message");
                                 Switch::handle_lookup(t, &self.listener, &self.center);
                             }
                             Class::Details => {
-                                log::trace!("incoming details message");
                                 Switch::handle_details(t, &self.signaling, &self.table);
                             }
                             Class::Action => {
-                                log::trace!("incoming details message");
                                 Switch::handle_action(t, &self.topics, &self.interface);
                             }
                             Class::Subscriber => {
-                                log::trace!("incoming subscriber message");
                                 Switch::handle_subscriber(t, &self.topics, &self.center);
                             }
                             Class::Unsubscriber => {
-                                log::trace!("incoming unsubscriber message");
                                 Switch::handle_unsubscriber(t, &self.topics);
                             }
                             _ => {
@@ -296,7 +264,6 @@ impl Switch {
                         // Maybe Handle: Subscribe, Unsubscribe, Lookup
                         match t.class() {
                             Class::Subscribe => {
-                                log::trace!("incoming subscribe message for local topic");
                                 Switch::handle_subscribe(
                                     t,
                                     &self.listener,
@@ -306,7 +273,6 @@ impl Switch {
                                 );
                             }
                             Class::Unsubscribe => {
-                                log::trace!("incoming unsubscribe message for local topic");
                                 Switch::handle_unsubscribe(
                                     t,
                                     &self.listener,
@@ -327,6 +293,7 @@ impl Switch {
     }
 
     fn handle_ping(t: Transaction, channel: &Channel<Transaction>, center: &Center) {
+        log::trace!("incoming ping message");
         let node = Node::new(center.public.clone(), Some(center.link.clone()));
         let message = Message::new(
             Class::Details,
@@ -340,10 +307,12 @@ impl Switch {
     }
 
     fn handle_pong(t: Transaction, channel: &Channel<SignalingAction>) {
+        log::trace!("incoming pong message");
         let _ = channel.send(SignalingAction::pong(t.source(), t.uuid));
     }
 
     fn handle_lookup(t: Transaction, listener: &Channel<Transaction>, center: &Center) {
+        log::trace!("incoming lookup message");
         let node = Node::new(center.public.clone(), Some(center.link.clone()));
         let message = Message::new(
             Class::Details,
@@ -357,6 +326,7 @@ impl Switch {
     }
 
     fn handle_details(t: Transaction, channel: &Channel<SignalingAction>, table: &Safe) {
+        log::trace!("incoming details message");
         if let Ok(node) = Node::from_bytes(t.message.body.as_bytes()) {
             table.add(node);
             let action = SignalingAction::pong(t.source(), t.uuid);
@@ -371,6 +341,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         interface: &Channel<InterfaceAction>,
     ) {
+        log::trace!("incoming details message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let command = Command::Message(t);
             let _ = simple.channel.send(command);
@@ -381,6 +352,7 @@ impl Switch {
     }
 
     fn handle_subscriber(t: Transaction, topics: &RefCell<TopicBucket>, center: &Center) {
+        log::trace!("incoming subscriber message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let addrs = Address::from_bulk(t.message.body.as_bytes());
             for sub in addrs {
@@ -393,6 +365,7 @@ impl Switch {
     }
 
     fn handle_unsubscriber(t: Transaction, topics: &RefCell<TopicBucket>) {
+        log::trace!("incoming unsubscriber message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let action = Command::Subscriber(t.source());
             let _ = simple.channel.send(action);
@@ -406,45 +379,46 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         center: &Center,
     ) {
+        log::trace!("incoming subscribe message for local topic");
         let topic = t.topic();
-        println!("data: received subscribe request for: {:?}", topic);
         match records.get(&topic) {
             Some(record) => {
-                records.subscribe(&topic, t.source());
-                let mut subscribers = Vec::new();
-                record
-                    .subscribers
+                records.subscribe(&record.address, t.source());
+                let record = records.get(&topic).unwrap();
+                let subscribers = record.subscribers.clone();
+                let mut subscribers_vec = Vec::new();
+                subscribers
                     .iter()
-                    .for_each(|x| subscribers.append(&mut x.as_bytes().to_vec()));
-                subscribers.append(&mut t.source().as_bytes().to_vec());
-                if topics.borrow().is_local(&topic) {
-                    let message = Message::new(
-                        Class::Subscriber,
-                        t.topic(),
-                        t.source(),
-                        topic.clone(),
-                        subscribers.clone(),
-                    );
-                    let transaction = Transaction::new(message);
-                    Switch::handle_subscriber(transaction, topics, center)
-                }
-                for addr in record.subscribers {
-                    let message = Message::new(
-                        Class::Subscriber,
-                        t.source(),
-                        addr,
-                        topic.clone(),
-                        subscribers.clone(),
-                    );
-                    let transaction = Transaction::new(message);
-                    let _ = listener.send(transaction);
+                    .for_each(|x| subscribers_vec.append(&mut x.as_bytes().to_vec()));
+                for subscriber in record.subscribers {
+                    if subscriber == center.public {
+                        if let Some(simple) = topics.borrow().find(&topic) {
+                            for sub in &subscribers {
+                                let _ = simple.channel.send(Command::Subscriber(sub.clone()));
+                            }
+                        }
+                    } else {
+                        let message = Message::new(
+                            Class::Subscriber,
+                            t.topic(),
+                            subscriber,
+                            t.topic(),
+                            subscribers_vec.clone(),
+                        );
+                        let transaction = Transaction::new(message);
+                        let _ = listener.send(transaction);
+                    }
                 }
             }
             None => {
-                println!("data: creating new record: {:?}", topic);
                 let mut record = Record::new(topic.clone());
                 record.subscribe(t.source());
                 records.add(record);
+                let message =
+                    Message::new(Class::Subscriber, t.topic(), t.source(), t.topic(), vec![]);
+                let transaction = Transaction::new(message);
+                // TODO: Handle error
+                let _ = listener.send(transaction);
             }
         }
     }
@@ -456,6 +430,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         center: &Center,
     ) {
+        log::trace!("incoming unsubscribe message for local topic");
         let topic = t.target();
         match records.get(&topic) {
             Some(record) => {
