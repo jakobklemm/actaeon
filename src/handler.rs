@@ -234,20 +234,14 @@ impl Listener {
         if targets.len() == 0 {
             return Err(Error::System("no target nodes found".to_string()));
         }
-        println!("data: found targets: {:?}", targets);
-        println!("data: existing connection: {:?}", conns.connections);
         for node in targets {
-            println!("data: node: {:?}", node);
             let addr = node.address.clone();
             if let Some(conn) = conns.get(&addr) {
-                println!("data: reusing existing connection");
                 return conn.send(t.to_wire());
             } else {
                 if conns.len() >= conns.limit {
-                    println!("data: sending single message for: {:?}", addr);
                     return Listener::write(t.to_wire(), node, center);
                 } else {
-                    println!("data: new connection for {:?}", addr);
                     if let Ok(stream) = Listener::activate(t.to_wire(), node, center) {
                         let (conn, handler) = Connection::new(addr, stream, cache.clone());
                         handler.spawn();
@@ -335,10 +329,7 @@ impl Handler {
                             if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                                 self.cache.add(&wire.uuid);
                                 // message
-                                println!(
-                                    "data: sending message through existing connection: {:?}",
-                                    wire
-                                );
+                                println!("data: using existing connection",);
                                 let message = wire.as_bytes();
                                 let e = self.socket.write(&message);
                                 if e.is_err() {
@@ -501,7 +492,6 @@ mod tests {
     use super::*;
     use crate::message::Message;
     use crate::transaction::{Class, Transaction};
-    use sodiumoxide::crypto::box_::curve25519xsalsa20poly1305::SecretKey;
 
     #[test]
     fn test_connection_life() {

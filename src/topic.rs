@@ -183,6 +183,7 @@ impl Topic {
     /// mandatory (will require more tests))).
     pub fn broadcast(&mut self, body: Vec<u8>) -> Result<(), Error> {
         loop {
+            println!("data: cache size: {:?}", self.cache.len());
             match self.channel.try_recv() {
                 Some(m) => match m {
                     Command::Message(t) => {
@@ -205,7 +206,10 @@ impl Topic {
                 }
             }
         }
+        println!("data: completed topic loop, sending message");
+        println!("data: subscriber length: {:?}", self.subscribers.len());
         for sub in &self.subscribers.subscribers {
+            println!("data: sending message to: {:?}", sub);
             // TODO: Ownership issues, reduce clone calls.
             let action = Command::Broadcast(sub.clone(), body.clone());
             let e = self.channel.send(action);
@@ -213,6 +217,7 @@ impl Topic {
                 log::error!("channel is unavailable, it is possible the thread crashed.")
             }
         }
+        println!("data: function exited");
         return Ok(());
     }
 
@@ -238,6 +243,7 @@ impl Topic {
 
 impl Drop for Topic {
     fn drop(&mut self) {
+        println!("dropping topic: {:?}", self.address);
         for sub in self.subscribers.clone().into_iter() {
             let command = Command::Drop(sub);
             let _ = self.channel.send(command);
@@ -296,6 +302,10 @@ impl SubscriberBucket {
     /// Shorthand function for adding many Subscribers at once.
     pub fn add_bulk(&mut self, data: Vec<Address>) {
         data.iter().for_each(|x| self.add(x.clone()));
+    }
+
+    pub fn len(&self) -> usize {
+        self.subscribers.len()
     }
 }
 

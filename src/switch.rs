@@ -103,6 +103,14 @@ impl Switch {
                             let target = simple.address.clone();
                             self.topics.borrow_mut().add(simple);
                             if self.table.should_be_local(&target) {
+                                println!(
+                                    "data: Current RT state: {:?}",
+                                    self.table.get_copy(&Address::random(), 5)
+                                );
+                                println!(
+                                    "data: topic is local: {:?}, center: {:?}",
+                                    target, self.center.public
+                                );
                                 let message = Message::new(
                                     Class::Subscribe,
                                     self.center.public.clone(),
@@ -120,6 +128,7 @@ impl Switch {
                                     &self.center,
                                 )
                             } else {
+                                println!("data: topic should not be handled locally");
                                 let message = Message::new(
                                     Class::Subscribe,
                                     self.center.public.clone(),
@@ -147,6 +156,7 @@ impl Switch {
                         log::info!("received message from topic");
                         match command {
                             Command::Drop(addr) => {
+                                println!("data: dropping topic!");
                                 log::trace!("topic went out of scope");
                                 // The addr is of the user to send the
                                 // unsubscribe to, not of the topic!
@@ -184,6 +194,7 @@ impl Switch {
                             }
                             Command::Broadcast(addr, body) => {
                                 log::trace!("received broadcast from user");
+                                println!("data: message received on switch: {:?}", body);
                                 let message = Message::new(
                                     Class::Action,
                                     self.center.public.clone(),
@@ -194,8 +205,11 @@ impl Switch {
                                 let t = Transaction::new(message);
                                 let _ = self.listener.send(t);
                             }
-                            _ => {}
+                            _ => {
+                                println!("data: UB");
+                            }
                         }
+                    } else {
                     }
                 }
 
@@ -392,7 +406,8 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         center: &Center,
     ) {
-        let topic = t.target();
+        let topic = t.topic();
+        println!("data: received subscribe request for: {:?}", topic);
         match records.get(&topic) {
             Some(record) => {
                 records.subscribe(&topic, t.source());
@@ -426,6 +441,7 @@ impl Switch {
                 }
             }
             None => {
+                println!("data: creating new record: {:?}", topic);
                 let mut record = Record::new(topic.clone());
                 record.subscribe(t.source());
                 records.add(record);

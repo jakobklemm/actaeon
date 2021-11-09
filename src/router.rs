@@ -254,9 +254,9 @@ impl Table {
             // 3. Compute the distance between local and the target.
             let d2 = address ^ &self.center.public;
             // 4. Check which one is larger.
-            d2 >= d1
+            d1 >= d2
         } else {
-            // Edge case: if no node exists everything should be local!
+            // Edge case: if no node exists everything should be local.
             true
         }
     }
