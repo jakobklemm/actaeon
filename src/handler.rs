@@ -138,9 +138,12 @@ impl Listener {
             if let Ok((socket, node)) =
                 Listener::bootstrap(self.signaling, &self.table, &self.center)
             {
+                log::info!("actaeon bootstrap completed!");
                 let (conn, handler) = Connection::new(node.address, socket, self.cache.clone());
                 handler.spawn();
                 self.connections.borrow_mut().add(conn);
+            } else {
+                log::error!("actaeon bootstrap failed");
             }
             // TODO: Error handler
             loop {
@@ -174,9 +177,7 @@ impl Listener {
                         }
                         // if any of the steps fail the connection gets dropped.
                     }
-                    Err(_) => {
-                        log::error!("unable to handle incoming TCP connection.");
-                    }
+                    Err(_) => {}
                 }
 
                 // 3. Read from Connection channels

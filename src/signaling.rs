@@ -64,7 +64,7 @@ impl Signaling {
     }
 
     /// Starts the signaling thread.
-    pub fn start(self) {
+    pub fn start(mut self) {
         thread::spawn(move || {
             loop {
                 // 1. Try to read from Channel for new Actions.
@@ -89,6 +89,7 @@ impl Signaling {
 
                 // 2. Process an item from the Bucket.
                 if self.last.elapsed().unwrap() >= Duration::new(60, 0) {
+                    self.last = SystemTime::now();
                     if let Some(action) = self.bucket.borrow().get() {
                         let _ = self.channel.send(action.clone());
                     }
