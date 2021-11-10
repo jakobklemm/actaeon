@@ -163,6 +163,7 @@ impl Listener {
                 // 2. Read from TCP listener
                 match self.listener.accept() {
                     Ok((mut stream, _addr)) => {
+                        log::info!("new incoming TCP connection.");
                         if let Ok(node) = Handler::read_node(&mut stream) {
                             let _ = Handler::write_node(&mut stream, &self.center);
                             let addr = node.address.clone();
@@ -305,6 +306,7 @@ impl Handler {
             loop {
                 // Incoming TCP
                 if let Ok(wire) = Handler::read_wire(&mut self.socket) {
+                    log::info!("received message through existing connection.");
                     if !self.cache.exists(&wire.uuid) || wire.is_empty() {
                         self.cache.add(&wire.uuid);
                         let _ = self.channel.send(Action::Message(wire));

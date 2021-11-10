@@ -135,7 +135,7 @@ impl Switch {
                         log::info!("received message from topic");
                         match command {
                             Command::Drop(addr) => {
-                                log::trace!("topic went out of scope");
+                                log::info!("topic went out of scope");
                                 // The addr is of the user to send the
                                 // unsubscribe to, not of the topic!
                                 drop = true;
@@ -171,7 +171,7 @@ impl Switch {
                                 }
                             }
                             Command::Broadcast(addr, body) => {
-                                log::trace!("received broadcast from user");
+                                log::info!("received broadcast from user");
                                 let message = Message::new(
                                     Class::Action,
                                     self.center.public.clone(),
@@ -197,7 +197,7 @@ impl Switch {
                     log::info!("received message from signaling thread");
                     match action.action {
                         Type::Ping => {
-                            log::trace!("received signaling ping request");
+                            log::info!("received signaling ping request");
                             let message = Message::new(
                                 Class::Ping,
                                 self.center.public.clone(),
@@ -209,7 +209,7 @@ impl Switch {
                             let _ = self.listener.send(t);
                         }
                         Type::Lookup => {
-                            log::trace!("received signaling lookup request");
+                            log::info!("received signaling lookup request");
                             let message = Message::new(
                                 Class::Lookup,
                                 self.center.public.clone(),
@@ -229,7 +229,7 @@ impl Switch {
                     log::info!("received message from listener");
                     let target = t.target();
                     if target == self.center.public {
-                        log::trace!("handling incoming message locally");
+                        log::info!("handling incoming message locally");
                         // Handle: Ping, Pong, Lookup, Details, Action, Subscriber, Unsubscriber
                         // Error: Subscriber, Unsubscribe
                         match t.class() {
@@ -259,7 +259,7 @@ impl Switch {
                             }
                         }
                     } else {
-                        log::trace!("target is not local but this node might be responsible");
+                        log::info!("target is not local but this node might be responsible");
                         // Forward: Ping, Pong, Details, Action, Subscriber, Unsubscriber,
                         // Maybe Handle: Subscribe, Unsubscribe, Lookup
                         match t.class() {
@@ -293,7 +293,7 @@ impl Switch {
     }
 
     fn handle_ping(t: Transaction, channel: &Channel<Transaction>, center: &Center) {
-        log::trace!("incoming ping message");
+        log::info!("incoming ping message");
         let node = Node::new(center.public.clone(), Some(center.link.clone()));
         let message = Message::new(
             Class::Details,
@@ -307,12 +307,12 @@ impl Switch {
     }
 
     fn handle_pong(t: Transaction, channel: &Channel<SignalingAction>) {
-        log::trace!("incoming pong message");
+        log::info!("incoming pong message");
         let _ = channel.send(SignalingAction::pong(t.source(), t.uuid));
     }
 
     fn handle_lookup(t: Transaction, listener: &Channel<Transaction>, center: &Center) {
-        log::trace!("incoming lookup message");
+        log::info!("incoming lookup message");
         let node = Node::new(center.public.clone(), Some(center.link.clone()));
         let message = Message::new(
             Class::Details,
@@ -326,7 +326,7 @@ impl Switch {
     }
 
     fn handle_details(t: Transaction, channel: &Channel<SignalingAction>, table: &Safe) {
-        log::trace!("incoming details message");
+        log::info!("incoming details message");
         if let Ok(node) = Node::from_bytes(t.message.body.as_bytes()) {
             table.add(node);
             let action = SignalingAction::pong(t.source(), t.uuid);
@@ -341,7 +341,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         interface: &Channel<InterfaceAction>,
     ) {
-        log::trace!("incoming details message");
+        log::info!("incoming details message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let command = Command::Message(t);
             let _ = simple.channel.send(command);
@@ -352,7 +352,7 @@ impl Switch {
     }
 
     fn handle_subscriber(t: Transaction, topics: &RefCell<TopicBucket>, center: &Center) {
-        log::trace!("incoming subscriber message");
+        log::info!("incoming subscriber message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let addrs = Address::from_bulk(t.message.body.as_bytes());
             for sub in addrs {
@@ -365,7 +365,7 @@ impl Switch {
     }
 
     fn handle_unsubscriber(t: Transaction, topics: &RefCell<TopicBucket>) {
-        log::trace!("incoming unsubscriber message");
+        log::info!("incoming unsubscriber message");
         if let Some(simple) = topics.borrow().find(&t.topic()) {
             let action = Command::Subscriber(t.source());
             let _ = simple.channel.send(action);
@@ -379,7 +379,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         center: &Center,
     ) {
-        log::trace!("incoming subscribe message for local topic");
+        log::info!("incoming subscribe message for local topic");
         let topic = t.topic();
         match records.get(&topic) {
             Some(record) => {
@@ -430,7 +430,7 @@ impl Switch {
         topics: &RefCell<TopicBucket>,
         center: &Center,
     ) {
-        log::trace!("incoming unsubscribe message for local topic");
+        log::info!("incoming unsubscribe message for local topic");
         let topic = t.target();
         match records.get(&topic) {
             Some(record) => {

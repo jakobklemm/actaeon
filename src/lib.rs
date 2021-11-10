@@ -128,6 +128,8 @@ impl Interface {
         )?;
         let signaling = Signaling::new(signaling2, table.clone());
 
+        log::info!("actaeon is starting up!");
+
         // startup
         listener.start();
         switch.start();
