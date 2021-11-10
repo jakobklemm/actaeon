@@ -1,6 +1,6 @@
 [package]
 name = "actaeon"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2018"
 keywords = ["networking", "pubsub", "kademlia", "decentralized"]
 description = "Decentralized PubSub & messaging protocol inspired by Kademlia."

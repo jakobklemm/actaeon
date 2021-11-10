@@ -147,7 +147,7 @@ impl Interface {
     /// of subscribers (that will get updated and refreshed on demand)
     /// as well as a Channel to the Switch. From there any updates are
     /// processed.
-    pub fn subscribe(self, addr: &Address) -> Topic {
+    pub fn subscribe(&self, addr: &Address) -> Topic {
         let (c1, c2) = Channel::new();
         let local = Topic::new(addr.clone(), c1, Vec::new(), self.center.public.clone());
         let remote = Simple::new(addr.clone(), c2);
