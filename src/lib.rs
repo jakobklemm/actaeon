@@ -17,17 +17,19 @@
 //! };
 //! use sodiumoxide::crypto::box_;
 //!
-//! fn main() {
+//! #[tokio::main]
+//! async fn main() {
 //!     let config = Config::new(20, 1, 100, "example.com".to_string(), 4242);
 //!     let (_, secret) = box_::gen_keypair();
 //!     let center = Center::new(secret, String::from("127.0.0.1"), 1235);
 //!
-//!     let interface = Interface::new(config, center).unwrap();
+//!     let interface = Interface::new(config, center).await.unwrap();
 //!
 //!     let mut topic = interface.subscribe(&"example".to_string().to_address());
 //!
 //!     let _ = topic.broadcast("hello world".as_bytes().to_vec());
 //! }
+//!
 //! ```
 
 pub mod bucket;
@@ -103,7 +105,7 @@ impl Interface {
     ///
     /// Should any of the steps fail the entire function fails, which
     /// means the system is unable to start.
-    pub fn new(config: Config, center: Center) -> Result<Self, Error> {
+    pub async fn new(config: Config, center: Center) -> Result<Self, Error> {
         // initialize
         let bucket = RecordBucket::new();
         let (switch1, switch2) = Channel::<InterfaceAction>::new();

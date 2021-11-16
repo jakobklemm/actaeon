@@ -6,20 +6,20 @@ use actaeon::{
 };
 use sodiumoxide::crypto::box_;
 
-#[test]
-fn test_topic_multi() {
+#[tokio::test]
+async fn test_topic_multi() {
     let port1 = 42460;
     let port2 = 42461;
 
     let lconfig = Config::new(20, 10, 1000, "127.0.0.1".to_string(), port1);
     let lcenter = gen_center_near("127.0.0.1", port2);
-    let linterface = Interface::new(lconfig, lcenter.clone()).unwrap();
+    let linterface = Interface::new(lconfig, lcenter.clone()).await.unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(10));
 
     let rconfig = Config::new(20, 10, 1000, "127.0.0.1".to_string(), port2);
     let rcenter = gen_center_far("127.0.0.1", port1);
-    let rinterface = Interface::new(rconfig, rcenter.clone()).unwrap();
+    let rinterface = Interface::new(rconfig, rcenter.clone()).await.unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(10));
 
@@ -79,22 +79,22 @@ fn gen_center_far(ip: &str, port: usize) -> Center {
     }
 }
 
-#[test]
-fn test_topic_random() {
+#[tokio::test]
+async fn test_topic_random() {
     let port1 = 42270;
     let port2 = 42271;
 
     let lconfig = Config::new(20, 10, 1000, "127.0.0.1".to_string(), port1);
     let (_, s1) = box_::gen_keypair();
     let lcenter = Center::new(s1, "127.0.0.1".to_string(), port2);
-    let linterface = Interface::new(lconfig, lcenter.clone()).unwrap();
+    let linterface = Interface::new(lconfig, lcenter.clone()).await.unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(10));
     let (_, s2) = box_::gen_keypair();
     let rconfig = Config::new(20, 10, 1000, "127.0.0.1".to_string(), port2);
 
     let rcenter = Center::new(s2, "127.0.0.1".to_string(), port1);
-    let rinterface = Interface::new(rconfig, rcenter.clone()).unwrap();
+    let rinterface = Interface::new(rconfig, rcenter.clone()).await.unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(10));
 

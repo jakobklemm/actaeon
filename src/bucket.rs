@@ -49,7 +49,7 @@ impl Bucket {
     /// Adds a node to a bucket. If the bucket is full, an error is
     /// returned. This function does not follow any of the kademlia
     /// rules and is intended to be used as a first step, before
-    /// specifiying the behavior for full buckets. Currently a
+    /// specifying the behavior for full buckets. Currently a
     /// dedicated error type is used for situations like this:
     /// Error::Full. Should the node not belong in this bucket, the
     /// function will also fail.

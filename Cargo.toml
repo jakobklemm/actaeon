@@ -1,7 +1,7 @@
 [package]
 name = "actaeon"
 version = "0.2.1"
-edition = "2018"
+edition = "2021"
 keywords = ["networking", "pubsub", "kademlia", "decentralized"]
 description = "Decentralized PubSub & messaging protocol inspired by Kademlia."
 license-file = "LICENSE"
@@ -18,6 +18,8 @@ rand = "0.8.4"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 sodiumoxide = "0.2.7"
 blake3 = "1.0.0"
+tokio = { version = "1.14.0", features = ["full"] }
 
 [dev-dependencies]
 env_logger = "0.9.0"
+tokio-test = "*"

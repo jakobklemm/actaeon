@@ -37,4 +37,6 @@ There are still some unresolved issues:
 - Error handling for signaling & multiple signaling servers.
 - Add interior mutability for topics so the user doesn't have to
   declare them as mutable.
+- Remove busy loops and introduce async-await with Tokio and Mio.
+- Add Record Republishing so the network can stay balanced.
 - Handle crashed threads.

@@ -11,10 +11,9 @@ use crate::router::Safe;
 use crate::transaction::{Transaction, Wire};
 use crate::util::{self, Channel};
 use std::cell::RefCell;
-use std::io::prelude::*;
-use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tokio::net::{TcpListener, TcpStream};
 
 /// Represents the TCP listener and exposes certain functions to
 /// interact with the outside world. They are mostly just wrappers
@@ -110,15 +109,14 @@ impl Connection {
 impl Listener {
     /// Spaws a new TCP listener based on the link details of the
     /// center.
-    pub fn new(
+    pub async fn new(
         center: Center,
         channel: Channel<Transaction>,
         limit: usize,
         table: Safe,
         signaling: Signaling,
     ) -> Result<Self, Error> {
-        let listener = TcpListener::bind(center.link.to_string())?;
-        listener.set_nonblocking(true)?;
+        let listener = TcpListener::bind(center.link.to_string()).await?;
         let listener = Self {
             center,
             listener,

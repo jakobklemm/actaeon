@@ -13,11 +13,12 @@ use sodiumoxide::crypto::box_;
 use std::io;
 use std::sync::mpsc;
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     let config = Config::new(20, 1, 100, "example.com".to_string(), 4242);
     let (_, secret) = box_::gen_keypair();
     let center = Center::new(secret, String::from("127.0.0.1"), 4242);
-    let interface = Interface::new(config, center).unwrap();
+    let interface = Interface::new(config, center).await.unwrap();
     let (s, r) = mpsc::channel();
     std::thread::sleep(std::time::Duration::from_millis(125));
     println!("Actaeon Chat Example Application!");
