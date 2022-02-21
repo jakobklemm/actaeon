@@ -1,14 +1,14 @@
 [package]
 name = "actaeon"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
-keywords = ["networking", "pubsub", "kademlia", "decentralized"]
+keywords = ["networking", "pubsub", "kademlia"]
 description = "Decentralized PubSub & messaging protocol inspired by Kademlia."
 license-file = "LICENSE"
 authors = ["Jakob Klemm <github@jeykey.net>"]
-publish = true
-homepage = "https://github.com/EngineOrion/actaeon"
-repository = "https://github.com/EngineOrion/actaeon"
+publish = false
+homepage = "https://github.com/jakobklemm/actaeon"
+repository = "https://github.com/jakobklemm/actaeon"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
