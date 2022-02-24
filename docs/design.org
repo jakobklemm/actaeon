@@ -1,0 +1,88 @@
+#+TITLE: Design
+#+AUTHOR: Jakob Klemm
+
+Since =crates.io= doesn't allow =org-mode= as a README this dedicated
+document contains some visualizations, design ideas and helpers for
+development. 
+
+#+begin_src plantuml :file initial_design.png
+  title Actaeon Data Flow
+  !theme cyborg-outline
+
+  [*] --> UserClient : Create New Topic
+
+  state UserClient {
+          [*] --> UserTopicProcess : Create new process
+          [*] --> ApplicationProcess
+          UserTopicProcess : Handles messages for one topic
+  }
+
+  UserClient --> HomeNode : Forward request
+  UserClient --> Node5 : Create connection
+  UserTopicProcess --> TopicProcess : Handle messages
+  TopicProcess --> UserTopicProcess : Handle messages
+
+  HomeNode : Compute primary topic address
+  HomeNode : Initiate query through Kademlia
+
+  HomeNode --> Node1 : Kademlia messaging
+  Node1 : Compute if local
+  Node1 : Forward request
+
+  HomeNode --> Node2 : Kademlia messaging
+  Node2 : Compute if local
+  Node2 : Forward request
+
+  HomeNode --> Node3 : Kademlia messaging
+  Node3 : Compute if local
+  Node3 : Forward request
+
+  Node3 --> Node4 : Kademlia messaging
+  Node4 : Compute if local
+  Node4 : Forward request
+
+  Node3 --> Node5 : Kademlia messaging
+  Node5 : Compute if local
+  Node5 : Forward request
+
+  Node3 --> TargetNode : Kademlia messaging
+  TargetNode : Topic address is local
+  TargetNode : Create local topic reference
+
+  state TargetNode {
+          [*] --> BiddingProcess : Start subprocess
+          TargetNode --> Node3 : Bidding query
+          TargetNode --> Node1 : Bidding query
+          Node3 --> Node5 : Forward bidding query
+
+          Node1 --> BiddingProcess : Submit request
+          Node5 --> BiddingProcess : Submit request
+
+          BiddingProcess : Send out bidding requests
+          BiddingProcess : Evaluate returned bids
+          BiddingProcess : Inform winning bid
+
+          BiddingProcess --> Node5 : Inform winner
+
+          [*] --> RNP : Start subprocess
+
+          BiddingProcess --> RNP : Store winning address
+
+          RNP : Store pointer to topic
+  }
+
+  state Node5 {
+          Node5 : Node that won the bid
+          Node5 : Responsible for the topic
+          [*] --> TopicProcess : Start process
+          [*] --> StorageProcess : Start process
+          TopicProcess --> TargetNode : Inform about started process
+          TopicProcess -> HomeNode : Inform about started process
+          StorageProcess : TODO Add details
+  }
+
+  HomeNode --> UserClient : Inform about started process
+#+end_src
+
+#+RESULTS:
+[[file:initial_design.png]]
